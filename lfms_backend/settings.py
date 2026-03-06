@@ -43,12 +43,23 @@ REST_FRAMEWORK = {
 
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+  
+    "ACCESS_TOKEN_LIFETIME":  timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+
+    
+    "ROTATE_REFRESH_TOKENS":   True,
+    "BLACKLIST_AFTER_ROTATION": True,
+
+   
+    "AUTH_HEADER_TYPES": ("Bearer",),
+
+  
+    "UPDATE_LAST_LOGIN": True,
+
+    "ALGORITHM": "HS256",
 }
 
-
-# Application definition
 
 INSTALLED_APPS = [
     'corsheaders',
@@ -60,6 +71,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'api',
     'rest_framework',
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",  
 
 ]
 
@@ -151,3 +164,10 @@ CORS_ALLOWS_CREDENTIALS = True
 
 AUTH_USER_MODEL = 'api.User'
 
+CORS_ALLOW_HEADERS = [
+    "authorization",
+    "content-type",
+    "accept",
+    "origin",
+    "x-requested-with",
+]

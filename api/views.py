@@ -3,6 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 from .models import UserProfile
 from .serializers import (
@@ -36,6 +38,33 @@ class LoginView(APIView):
         return Response(serializer.errors, status=400)
 
 
+class LogoutView(APIView):
+    """
+    Blacklists the refresh token so it can't be used to mint new access tokens
+    after the user logs out. Requires simplejwt ROTATE_REFRESH_TOKENS and
+    BLACKLIST_AFTER_ROTATION, or the blacklist app, to fully invalidate.
+
+    Even without blacklisting, the frontend drops both tokens on logout, so
+    this endpoint is the server-side safety net.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        refresh_token = request.data.get("refresh")
+        if not refresh_token:
+            return Response(
+                {"detail": "Refresh token is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()   # requires 'rest_framework_simplejwt.token_blacklist' in INSTALLED_APPS
+            return Response({"message": "Logged out successfully."}, status=status.HTTP_205_RESET_CONTENT)
+        except (TokenError, InvalidToken) as e:
+            # Token already expired or invalid — still counts as logged out
+            return Response({"message": "Logged out."}, status=status.HTTP_205_RESET_CONTENT)
+
+
 class AdminDashboard(APIView):
     permission_classes = [IsAdminUserRole]
 
@@ -67,9 +96,7 @@ class ProfileView(APIView):
             "email":      request.data.get("email",      request.user.email),
         }
 
-
         profile_fields = {}
-
         for key in ("phone_number", "address", "bio"):
             bracket_key = f"profile[{key}]"
             dot_key     = f"profile.{key}"
@@ -78,9 +105,8 @@ class ProfileView(APIView):
             elif dot_key in request.data:
                 profile_fields[key] = request.data[dot_key]
 
-
-        bracket_avatar = f"profile[avatar]"
-        dot_avatar     = f"profile.avatar"
+        bracket_avatar = "profile[avatar]"
+        dot_avatar     = "profile.avatar"
         if bracket_avatar in request.FILES:
             profile_fields["avatar"] = request.FILES[bracket_avatar]
         elif dot_avatar in request.FILES:
