@@ -5,36 +5,27 @@ from .models import UserProfile
 
 User = get_user_model()
 
+
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
+    password         = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
 
     class Meta:
-        model = User
+        model  = User
         fields = [
-            "username",
-            "first_name",
-            "last_name",
-            "email",
-            "password",
-            "confirm_password",
-            "role",
+            "username", "first_name", "last_name",
+            "email", "password", "confirm_password", "role",
         ]
-        extra_kwargs = {
-            "password": {"write_only": True}
-        }
+        extra_kwargs = {"password": {"write_only": True}}
 
     def validate(self, data):
-        if data['password'] != data['confirm_password']:
-            raise serializers.ValidationError({
-                "password": "Passwords do not match."
-            })
+        if data["password"] != data["confirm_password"]:
+            raise serializers.ValidationError({"password": "Passwords do not match."})
         return data
 
     def create(self, validated_data):
         validated_data.pop("confirm_password")
-
-        user = User.objects.create_user(
+        return User.objects.create_user(
             username=validated_data["username"],
             first_name=validated_data["first_name"],
             last_name=validated_data["last_name"],
@@ -43,8 +34,6 @@ class RegisterSerializer(serializers.ModelSerializer):
             role=validated_data.get("role", "USER"),
         )
 
-        return user
-
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
@@ -52,71 +41,78 @@ class LoginSerializer(serializers.Serializer):
 
     def validate(self, data):
         from django.contrib.auth import authenticate
-
-        user = authenticate(
-            username=data['username'],
-            password=data['password']
-        )
-
+        user = authenticate(username=data["username"], password=data["password"])
         if not user:
             raise serializers.ValidationError("Invalid credentials")
-
         refresh = RefreshToken.for_user(user)
-
         return {
             "refresh": str(refresh),
-            "access": str(refresh.access_token),
-            "role": user.role,
-            "username": user.username
+            "access":  str(refresh.access_token),
+            "role":    user.role,
+            "username": user.username,
         }
 
 
-
 class UserProfileSerializer(serializers.ModelSerializer):
-
     class Meta:
-        model = UserProfile
-        fields = ["phone_number", "address", "avatar", "bio"]
+        model  = UserProfile
+        fields = ["phone_number", "address", "bio", "avatar"]
+        extra_kwargs = {
+            "avatar": {"required": False, "allow_null": True},
+        }
+
+    def to_representation(self, instance):
+        """Return absolute avatar URL instead of a bare relative path."""
+        ret     = super().to_representation(instance)
+        request = self.context.get("request")
+        avatar  = instance.avatar
+
+        if avatar:
+            try:
+                url = avatar.url
+                ret["avatar"] = request.build_absolute_uri(url) if request else url
+            except Exception:
+                ret["avatar"] = None
+        else:
+            ret["avatar"] = None
+
+        return ret
 
     def update(self, instance, validated_data):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-
         instance.save()
         return instance
 
 
 class UserSerializer(serializers.ModelSerializer):
-    profile = UserProfileSerializer()
+    profile = UserProfileSerializer(required=False)
 
     class Meta:
-        model = User
+        model  = User
         fields = [
-            "id",
-            "username",
-            "first_name",
-            "last_name",
-            "email",
-            "role",
-            "profile",
+            "id", "username", "first_name", "last_name",
+            "email", "role", "date_joined", "profile",
         ]
+
+    def to_representation(self, instance):
+        """Make sure nested profile serializer also gets the request context."""
+        self.fields["profile"].context.update(self.context)
+        return super().to_representation(instance)
 
     def update(self, instance, validated_data):
         profile_data = validated_data.pop("profile", None)
 
+        # Update top-level User fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-
         instance.save()
 
-        if profile_data:
-            profile = getattr(instance, "profile", None)
-            if profile is None:
-                profile = UserProfile.objects.create(user=instance)
-
+        # Update or create nested UserProfile
+        if profile_data is not None:
+            profile, _ = UserProfile.objects.get_or_create(user=instance)
             for attr, value in profile_data.items():
                 setattr(profile, attr, value)
             profile.save()
 
-        
         return instance
