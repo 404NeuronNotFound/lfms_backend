@@ -2,9 +2,13 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from .serializers import RegisterSerializer, LoginSerializer
+
+from .models import UserProfile
+from .serializers import RegisterSerializer, LoginSerializer, UserProfileSerializer, UserSerializer
 from django.contrib.auth import get_user_model
 from .permissions import IsAdminUserRole, IsNormalUserRole
+from rest_framework.permissions import IsAuthenticated
+
 
 User = get_user_model()
 
@@ -47,18 +51,21 @@ class UserDashboard(APIView):
         return Response({"message": "Welcome User!"})
     
 
-from rest_framework.permissions import IsAuthenticated
-from .serializers import UserSerializer
-
 
 class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # Ensure user has a profile
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
     def patch(self, request):
+        # Ensure user has a profile
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
         serializer = UserSerializer(
             request.user,
             data=request.data,
