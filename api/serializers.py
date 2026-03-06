@@ -76,7 +76,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserProfile
-        fields = ["phone_number", "address", "avatar"]
+        fields = ["phone_number", "address", "avatar", "bio"]
 
     def update(self, instance, validated_data):
         for attr, value in validated_data.items():
@@ -110,10 +110,13 @@ class UserSerializer(serializers.ModelSerializer):
         instance.save()
 
         if profile_data:
-            profile = instance.profile
+            profile = getattr(instance, "profile", None)
+            if profile is None:
+                profile = UserProfile.objects.create(user=instance)
+
             for attr, value in profile_data.items():
                 setattr(profile, attr, value)
-
             profile.save()
+
         
         return instance
