@@ -39,14 +39,7 @@ class LoginView(APIView):
 
 
 class LogoutView(APIView):
-    """
-    Blacklists the refresh token so it can't be used to mint new access tokens
-    after the user logs out. Requires simplejwt ROTATE_REFRESH_TOKENS and
-    BLACKLIST_AFTER_ROTATION, or the blacklist app, to fully invalidate.
 
-    Even without blacklisting, the frontend drops both tokens on logout, so
-    this endpoint is the server-side safety net.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -58,10 +51,10 @@ class LogoutView(APIView):
             )
         try:
             token = RefreshToken(refresh_token)
-            token.blacklist()   # requires 'rest_framework_simplejwt.token_blacklist' in INSTALLED_APPS
+            token.blacklist() 
             return Response({"message": "Logged out successfully."}, status=status.HTTP_205_RESET_CONTENT)
         except (TokenError, InvalidToken) as e:
-            # Token already expired or invalid — still counts as logged out
+         
             return Response({"message": "Logged out."}, status=status.HTTP_205_RESET_CONTENT)
 
 
@@ -132,3 +125,32 @@ class ProfileView(APIView):
             })
 
         return Response(serializer.errors, status=400)
+    
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        current_password     = request.data.get("current_password")
+        new_password         = request.data.get("new_password")
+        confirm_new_password = request.data.get("confirm_new_password")
+
+ 
+        if not current_password:
+            return Response({"current_password": ["Current password is required."]}, status=400)
+        if not new_password:
+            return Response({"new_password": ["New password is required."]}, status=400)
+        if len(new_password) < 6:
+            return Response({"new_password": ["Password must be at least 6 characters."]}, status=400)
+        if new_password != confirm_new_password:
+            return Response({"confirm_new_password": ["Passwords do not match."]}, status=400)
+
+   
+        if not request.user.check_password(current_password):
+            return Response({"current_password": ["Current password is incorrect."]}, status=400)
+
+  
+        request.user.set_password(new_password)
+        request.user.save()
+
+        return Response({"message": "Password changed successfully."}, status=200)
