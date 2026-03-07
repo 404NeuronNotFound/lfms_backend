@@ -3,12 +3,19 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
 from .views import (
     ChangePasswordView,
+    DeactivateAccountView,
+    ReactivateAccountView,
     RegisterView,
     LoginView,
     AdminDashboard,
     UserDashboard,
     ProfileView,
     LogoutView,
+    AdminUserListView,
+    AdminUserStatsView,
+    AdminUserDetailView,
+    AdminBanUserView,
+    AdminUnbanUserView,
 )
 
 urlpatterns = [
@@ -29,4 +36,13 @@ urlpatterns = [
     path("profile/",        ProfileView.as_view(),     name="profile"),
 
     path("change-password/", ChangePasswordView.as_view(), name="change_password"),
+
+    path("account/deactivate/",  DeactivateAccountView.as_view(),  name="account_deactivate"),
+    path("account/reactivate/",  ReactivateAccountView.as_view(),  name="account_reactivate"),
+
+    path("admin/users/",              AdminUserListView.as_view(),   name="admin_user_list"),
+    path("admin/users/stats/",        AdminUserStatsView.as_view(),  name="admin_user_stats"),
+    path("admin/users/<int:pk>/",     AdminUserDetailView.as_view(), name="admin_user_detail"),
+    path("admin/users/<int:pk>/ban/", AdminBanUserView.as_view(),    name="admin_ban_user"),
+    path("admin/users/<int:pk>/unban/",AdminUnbanUserView.as_view(), name="admin_unban_user"),
 ]
