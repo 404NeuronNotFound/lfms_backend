@@ -223,7 +223,7 @@ class LostReportSerializer(serializers.ModelSerializer):
 
     # ── Read-only computed / related fields ───────────────────────────────
     images      = ReportImageSerializer(many=True, read_only=True)
-    image_count = serializers.IntegerField(source='image_count', read_only=True)
+    image_count = serializers.IntegerField(read_only=True)
     user_info   = serializers.SerializerMethodField()
 
     class Meta:
@@ -323,7 +323,7 @@ class LostReportListSerializer(serializers.ModelSerializer):
     """
     main_image  = serializers.SerializerMethodField()
     user_info   = serializers.SerializerMethodField()
-    image_count = serializers.IntegerField(source='image_count', read_only=True)
+    image_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model  = LostReport
@@ -391,3 +391,31 @@ class AdminLostReportSerializer(LostReportSerializer):
             'email':    u.email,
             'phone':    phone,
         }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
