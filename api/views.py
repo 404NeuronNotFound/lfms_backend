@@ -17,11 +17,6 @@ from .permissions import IsAdminUserRole
 
 User = get_user_model()
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  AUTH
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 class RegisterView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -34,14 +29,7 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
-    """
-    POST { username, password }
 
-    Status enforcement:
-      banned   → 403, cannot login ever
-      inactive → account auto-reactivates, login succeeds
-      active   → login succeeds normally
-    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -66,9 +54,7 @@ class LogoutView(APIView):
         return Response({"message": "Logged out successfully."}, status=205)
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  DASHBOARDS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 class AdminDashboard(APIView):
     permission_classes = [IsAdminUserRole]
@@ -81,8 +67,6 @@ class UserDashboard(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # Blocked statuses should never reach here (JWT is still valid until expiry),
-        # so we double-check and refuse if status changed after token was issued.
         if request.user.status == "banned":
             return Response({"detail": "Your account has been banned."}, status=403)
         if request.user.status == "inactive":
@@ -90,9 +74,6 @@ class UserDashboard(APIView):
         return Response({"message": "Welcome!"})
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  PROFILE (self)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
@@ -138,10 +119,6 @@ class ProfileView(APIView):
         return Response(serializer.errors, status=400)
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  PASSWORD (self)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -165,17 +142,8 @@ class ChangePasswordView(APIView):
         request.user.save()
         return Response({"message": "Password changed successfully."}, status=200)
 
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ACCOUNT STATUS (self)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 class DeactivateAccountView(APIView):
-    """
-    POST /api/account/deactivate/
-    User self-deactivates their own account.
-    Sets status → inactive. Account reactivates automatically on next login.
-    """
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -186,7 +154,6 @@ class DeactivateAccountView(APIView):
         user.status = "inactive"
         user.save(update_fields=["status"])
 
-        # Optionally blacklist the current refresh token so they're logged out immediately
         refresh_token = request.data.get("refresh")
         if refresh_token:
             try:
@@ -198,12 +165,7 @@ class DeactivateAccountView(APIView):
 
 
 class ReactivateAccountView(APIView):
-    """
-    POST /api/account/reactivate/
-    Allows an inactive user to reactivate WITHOUT logging out first.
-    Banned users cannot use this — they must go through admin.
-    Requires valid JWT (they must still have an active token session).
-    """
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -221,21 +183,15 @@ class ReactivateAccountView(APIView):
         return Response({"message": "Your account has been reactivated."}, status=200)
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ADMIN — USER MANAGEMENT
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 class AdminUserListView(APIView):
-    """
-    GET  /api/admin/users/
-    Returns all users with optional ?status= and ?role= query filters.
-    """
+
     permission_classes = [IsAdminUserRole]
 
     def get(self, request):
         queryset = User.objects.select_related("profile").all().order_by("-date_joined")
 
-        # Optional filters
         status_filter = request.query_params.get("status")
         role_filter   = request.query_params.get("role")
         search        = request.query_params.get("search", "").strip()
@@ -263,11 +219,6 @@ class AdminUserListView(APIView):
 
 
 class AdminUserDetailView(APIView):
-    """
-    GET   /api/admin/users/<id>/   — fetch single user
-    PATCH /api/admin/users/<id>/   — edit role or status
-    DELETE /api/admin/users/<id>/  — delete account
-    """
     permission_classes = [IsAdminUserRole]
 
     def _get_user(self, pk):
@@ -288,18 +239,16 @@ class AdminUserDetailView(APIView):
         if not user:
             return Response({"detail": "User not found."}, status=404)
 
-        # Prevent admin from modifying their own role/status via this endpoint
         if user == request.user:
             return Response({"detail": "Admins cannot modify their own account via this endpoint."}, status=403)
 
         allowed_fields = {"role", "status", "first_name", "last_name", "email"}
         update_data    = {k: v for k, v in request.data.items() if k in allowed_fields}
 
-        # Validate status value
+
         if "status" in update_data and update_data["status"] not in ("active", "inactive", "banned"):
             return Response({"status": ["Must be one of: active, inactive, banned."]}, status=400)
 
-        # Validate role value
         if "role" in update_data and update_data["role"] not in ("ADMIN", "USER"):
             return Response({"role": ["Must be one of: ADMIN, USER."]}, status=400)
 
@@ -322,10 +271,6 @@ class AdminUserDetailView(APIView):
 
 
 class AdminBanUserView(APIView):
-    """
-    POST /api/admin/users/<id>/ban/
-    Bans a user. Banned users cannot login at all.
-    """
     permission_classes = [IsAdminUserRole]
 
     def post(self, request, pk):
@@ -347,10 +292,6 @@ class AdminBanUserView(APIView):
 
 
 class AdminUnbanUserView(APIView):
-    """
-    POST /api/admin/users/<id>/unban/
-    Lifts a ban and sets status back to active.
-    """
     permission_classes = [IsAdminUserRole]
 
     def post(self, request, pk):
@@ -368,10 +309,6 @@ class AdminUnbanUserView(APIView):
 
 
 class AdminUserStatsView(APIView):
-    """
-    GET /api/admin/users/stats/
-    Returns aggregate counts for the dashboard stat cards.
-    """
     permission_classes = [IsAdminUserRole]
 
     def get(self, request):

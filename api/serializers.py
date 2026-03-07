@@ -5,8 +5,6 @@ from .models import UserProfile
 
 User = get_user_model()
 
-
-# ── Registration ───────────────────────────────────────────────────────────
 class RegisterSerializer(serializers.ModelSerializer):
     password         = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
@@ -37,7 +35,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
 
 
-# ── Login ─────────────────────────────────────────────────────────────────
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -48,7 +45,6 @@ class LoginSerializer(serializers.Serializer):
         if not user:
             raise serializers.ValidationError({"non_field_errors": ["Invalid username or password."]})
 
-        # Hard block: banned accounts can never login
         if user.status == "banned":
             raise serializers.ValidationError({
                 "non_field_errors": [
@@ -56,7 +52,6 @@ class LoginSerializer(serializers.Serializer):
                 ]
             })
 
-        # Soft block: inactive accounts are re-activated on login
         if user.status == "inactive":
             user.status = "active"
             user.save(update_fields=["status"])
@@ -71,7 +66,7 @@ class LoginSerializer(serializers.Serializer):
         }
 
 
-# ── Profile ────────────────────────────────────────────────────────────────
+
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model        = UserProfile
@@ -99,7 +94,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return instance
 
 
-# ── User (full) ────────────────────────────────────────────────────────────
+
 class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(required=False)
 
@@ -112,7 +107,7 @@ class UserSerializer(serializers.ModelSerializer):
         ]
 
     def to_representation(self, instance):
-        # Propagate request context down into nested profile serializer
+
         self.fields["profile"].context.update(self.context)
         return super().to_representation(instance)
 
@@ -132,36 +127,51 @@ class UserSerializer(serializers.ModelSerializer):
         return instance
 
 
-# ── Admin: lightweight user list ───────────────────────────────────────────
+
 class UserListSerializer(serializers.ModelSerializer):
-    """Slim serializer used for the admin All-Users list endpoint."""
-    avatar = serializers.SerializerMethodField()
-    reports = serializers.SerializerMethodField()   # placeholder — wire to real model later
-    claims  = serializers.SerializerMethodField()
+    """
+    Serializer for GET /admin/users/
+    Returns a nested `profile` object so the frontend ApiUser type is satisfied:
+      { phone_number, address, bio, avatar }
+    """
+    profile = serializers.SerializerMethodField()
+    reports = serializers.SerializerMethodField()   
+    claims  = serializers.SerializerMethodField()   
 
     class Meta:
         model  = User
         fields = [
             "id", "username", "first_name", "last_name",
             "email", "role", "status", "date_joined", "last_login",
-            "avatar", "reports", "claims",
+            "profile", "reports", "claims",
         ]
 
-    def get_avatar(self, obj):
+    def get_profile(self, obj):
         request = self.context.get("request")
         try:
-            avatar = obj.profile.avatar
-            if avatar:
-                url = avatar.url
-                return request.build_absolute_uri(url) if request else url
+            p = obj.profile
         except Exception:
-            pass
-        return None
+            return {"phone_number": None, "address": None, "bio": None, "avatar": None}
+
+        avatar_url = None
+        if p.avatar:
+            try:
+                url = p.avatar.url
+                avatar_url = request.build_absolute_uri(url) if request else url
+            except Exception:
+                pass
+
+        return {
+            "phone_number": p.phone_number,
+            "address":      p.address,
+            "bio":          p.bio,
+            "avatar":       avatar_url,
+        }
 
     def get_reports(self, obj):
-        # Replace with obj.reports.count() once the Report model exists
+    
         return 0
 
     def get_claims(self, obj):
-        # Replace with obj.claims.count() once the Claim model exists
+
         return 0
