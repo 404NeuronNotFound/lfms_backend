@@ -333,3 +333,271 @@ class AdminUserStatsView(APIView):
             "banned":         banned,
             "new_this_month": new_this_month,
         })
+    
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  LOST REPORTS — USER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+from .models import LostReport, ReportImage
+from .serializers import (
+    LostReportSerializer,
+    LostReportListSerializer,
+    AdminLostReportSerializer,
+)
+
+
+class UserReportListCreateView(APIView):
+    """
+    GET  /api/reports/         — list the current user's own reports
+    POST /api/reports/         — create a new lost report (+ optional images)
+
+    Images are accepted as multipart/form-data via:
+      images[0], images[1], … images[4]   (up to 5 files)
+    The first uploaded image is automatically flagged as is_main=True.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = (
+            LostReport.objects
+            .filter(user=request.user)
+            .prefetch_related('images')
+            .order_by('-date_reported')
+        )
+        # Optional status filter  ?status=open
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        serializer = LostReportListSerializer(qs, many=True, context={'request': request})
+        return Response({'count': qs.count(), 'results': serializer.data})
+
+    def post(self, request):
+        serializer = LostReportSerializer(data=request.data, context={'request': request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        report = serializer.save(user=request.user)
+
+        # Handle uploaded images (up to 5)
+        uploaded_images = []
+        for i in range(5):
+            key = f'images[{i}]'
+            if key in request.FILES:
+                uploaded_images.append(request.FILES[key])
+
+        for idx, img_file in enumerate(uploaded_images[:5]):
+            ReportImage.objects.create(
+                report=report,
+                image=img_file,
+                is_main=(idx == 0),   # first image is the main thumbnail
+                order=idx,
+            )
+
+        # Return full detail serializer so the client gets image URLs
+        output = LostReportSerializer(report, context={'request': request})
+        return Response(output.data, status=201)
+
+
+class UserReportDetailView(APIView):
+    """
+    GET    /api/reports/<id>/   — view a single report (owner or admin)
+    PATCH  /api/reports/<id>/   — update own report fields (owner only, while open/under_review)
+    DELETE /api/reports/<id>/   — delete own report (owner only, while open)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _get_report(self, pk, user):
+        try:
+            return LostReport.objects.prefetch_related('images').get(pk=pk, user=user)
+        except LostReport.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        report = self._get_report(pk, request.user)
+        if not report:
+            return Response({'detail': 'Report not found.'}, status=404)
+        # Increment view counter
+        LostReport.objects.filter(pk=pk).update(views=report.views + 1)
+        serializer = LostReportSerializer(report, context={'request': request})
+        return Response(serializer.data)
+
+    def patch(self, request, pk):
+        report = self._get_report(pk, request.user)
+        if not report:
+            return Response({'detail': 'Report not found.'}, status=404)
+
+        # Users can only edit while the report is still open or under review
+        if report.status not in (LostReport.STATUS_OPEN, LostReport.STATUS_UNDER_REVIEW):
+            return Response(
+                {'detail': f"Reports with status '{report.status}' cannot be edited."},
+                status=403,
+            )
+
+        serializer = LostReportSerializer(
+            report, data=request.data, partial=True,
+            context={'request': request},
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        serializer.save()
+        return Response({'message': 'Report updated.', 'report': serializer.data})
+
+    def delete(self, request, pk):
+        report = self._get_report(pk, request.user)
+        if not report:
+            return Response({'detail': 'Report not found.'}, status=404)
+
+        # Only allow deletion while report is still open
+        if report.status != LostReport.STATUS_OPEN:
+            return Response(
+                {'detail': 'Only open reports can be deleted.'},
+                status=403,
+            )
+
+        report.delete()
+        return Response({'message': 'Report deleted.'}, status=200)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  LOST REPORTS — ADMIN
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class AdminReportListView(APIView):
+    """
+    GET /api/admin/reports/
+    Returns all reports across all users with optional filters:
+      ?status=open|under_review|matched|claimed|closed|rejected
+      ?category=Electronics|Keys|…
+      ?urgent=true
+      ?search=<text>   (searches item_name, location, username)
+      ?ordering=date|-date|views|-views
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def get(self, request):
+        qs = (
+            LostReport.objects
+            .select_related('user')
+            .prefetch_related('images')
+            .order_by('-date_reported')
+        )
+
+        # Filters
+        status_f   = request.query_params.get('status')
+        category_f = request.query_params.get('category')
+        urgent_f   = request.query_params.get('urgent')
+        search_f   = request.query_params.get('search', '').strip()
+        ordering_f = request.query_params.get('ordering', '-date_reported')
+
+        if status_f:
+            qs = qs.filter(status=status_f)
+        if category_f:
+            qs = qs.filter(category=category_f)
+        if urgent_f and urgent_f.lower() == 'true':
+            qs = qs.filter(is_urgent=True)
+        if search_f:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(item_name__icontains=search_f) |
+                Q(location__icontains=search_f)  |
+                Q(user__username__icontains=search_f)
+            )
+
+        allowed_orderings = {'date_reported', '-date_reported', 'views', '-views', 'item_name'}
+        if ordering_f in allowed_orderings:
+            qs = qs.order_by(ordering_f)
+
+        serializer = AdminLostReportSerializer(qs, many=True, context={'request': request})
+        return Response({'count': qs.count(), 'results': serializer.data})
+
+
+class AdminReportDetailView(APIView):
+    """
+    GET    /api/admin/reports/<id>/   — view any report in full
+    PATCH  /api/admin/reports/<id>/   — update status, admin_notes, or any field
+    DELETE /api/admin/reports/<id>/   — hard-delete a report
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def _get_report(self, pk):
+        try:
+            return LostReport.objects.select_related('user').prefetch_related('images').get(pk=pk)
+        except LostReport.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        report = self._get_report(pk)
+        if not report:
+            return Response({'detail': 'Report not found.'}, status=404)
+        serializer = AdminLostReportSerializer(report, context={'request': request})
+        return Response(serializer.data)
+
+    def patch(self, request, pk):
+        report = self._get_report(pk)
+        if not report:
+            return Response({'detail': 'Report not found.'}, status=404)
+
+        # Validate status if provided
+        new_status = request.data.get('status')
+        if new_status:
+            valid_statuses = [s[0] for s in LostReport.STATUS_CHOICES]
+            if new_status not in valid_statuses:
+                return Response(
+                    {'status': [f"Must be one of: {', '.join(valid_statuses)}"]},
+                    status=400,
+                )
+
+        serializer = AdminLostReportSerializer(
+            report, data=request.data, partial=True,
+            context={'request': request},
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        serializer.save()
+        return Response({'message': 'Report updated.', 'report': serializer.data})
+
+    def delete(self, request, pk):
+        report = self._get_report(pk)
+        if not report:
+            return Response({'detail': 'Report not found.'}, status=404)
+        report.delete()
+        return Response({'message': f"Report #{pk} deleted."}, status=200)
+
+
+class AdminReportStatsView(APIView):
+    """
+    GET /api/admin/reports/stats/
+    Returns aggregate counts for the reports dashboard stat cards.
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def get(self, request):
+        from django.utils import timezone as tz
+
+        now         = tz.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        total          = LostReport.objects.count()
+        open_count     = LostReport.objects.filter(status='open').count()
+        under_review   = LostReport.objects.filter(status='under_review').count()
+        matched        = LostReport.objects.filter(status='matched').count()
+        claimed        = LostReport.objects.filter(status='claimed').count()
+        closed         = LostReport.objects.filter(status='closed').count()
+        rejected       = LostReport.objects.filter(status='rejected').count()
+        urgent         = LostReport.objects.filter(is_urgent=True).count()
+        new_this_month = LostReport.objects.filter(date_reported__gte=month_start).count()
+
+        return Response({
+            'total':          total,
+            'open':           open_count,
+            'under_review':   under_review,
+            'matched':        matched,
+            'claimed':        claimed,
+            'closed':         closed,
+            'rejected':       rejected,
+            'urgent':         urgent,
+            'new_this_month': new_this_month,
+        })

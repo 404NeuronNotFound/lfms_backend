@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
 from .views import (
+    AdminReportListView,
     ChangePasswordView,
     DeactivateAccountView,
     ReactivateAccountView,
@@ -16,6 +17,11 @@ from .views import (
     AdminUserDetailView,
     AdminBanUserView,
     AdminUnbanUserView,
+    UserReportListCreateView,
+    UserReportDetailView,
+    AdminReportStatsView,
+    AdminReportDetailView,
+    
 )
 
 urlpatterns = [
@@ -45,4 +51,13 @@ urlpatterns = [
     path("admin/users/<int:pk>/",     AdminUserDetailView.as_view(), name="admin_user_detail"),
     path("admin/users/<int:pk>/ban/", AdminBanUserView.as_view(),    name="admin_ban_user"),
     path("admin/users/<int:pk>/unban/",AdminUnbanUserView.as_view(), name="admin_unban_user"),
+    
+     # ── User: lost reports ────────────────────────────────────────────────
+    path("reports/",          UserReportListCreateView.as_view(), name="report_list_create"),
+    path("reports/<int:pk>/", UserReportDetailView.as_view(),     name="report_detail"),
+
+    # ── Admin: lost reports ───────────────────────────────────────────────
+    path("admin/reports/",               AdminReportListView.as_view(),   name="admin_report_list"),
+    path("admin/reports/stats/",         AdminReportStatsView.as_view(),  name="admin_report_stats"),
+    path("admin/reports/<int:pk>/",      AdminReportDetailView.as_view(), name="admin_report_detail"),
 ]
