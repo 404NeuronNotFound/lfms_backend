@@ -17,6 +17,10 @@ from .permissions import IsAdminUserRole
 
 User = get_user_model()
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  AUTH
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 class RegisterView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -29,7 +33,6 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
-
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -50,11 +53,13 @@ class LogoutView(APIView):
             token = RefreshToken(refresh_token)
             token.blacklist()
         except (TokenError, InvalidToken):
-            pass  # already invalid / expired — still treat as logged out
+            pass
         return Response({"message": "Logged out successfully."}, status=205)
 
 
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  DASHBOARDS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class AdminDashboard(APIView):
     permission_classes = [IsAdminUserRole]
@@ -74,6 +79,9 @@ class UserDashboard(APIView):
         return Response({"message": "Welcome!"})
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  PROFILE & SETTINGS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
@@ -123,9 +131,9 @@ class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        current         = request.data.get("current_password")
-        new             = request.data.get("new_password")
-        confirm         = request.data.get("confirm_new_password")
+        current = request.data.get("current_password")
+        new     = request.data.get("new_password")
+        confirm = request.data.get("confirm_new_password")
 
         if not current:
             return Response({"current_password": ["Current password is required."]}, status=400)
@@ -142,8 +150,8 @@ class ChangePasswordView(APIView):
         request.user.save()
         return Response({"message": "Password changed successfully."}, status=200)
 
-class DeactivateAccountView(APIView):
 
+class DeactivateAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -161,11 +169,10 @@ class DeactivateAccountView(APIView):
             except (TokenError, InvalidToken):
                 pass
 
-        return Response({"message": "Your account has been deactivated. Log in any time to reactivate."}, status=200)
+        return Response({"message": "Your account has been deactivated."}, status=200)
 
 
 class ReactivateAccountView(APIView):
-
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -183,10 +190,11 @@ class ReactivateAccountView(APIView):
         return Response({"message": "Your account has been reactivated."}, status=200)
 
 
-
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ADMIN — USER MANAGEMENT
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class AdminUserListView(APIView):
-
     permission_classes = [IsAdminUserRole]
 
     def get(self, request):
@@ -212,10 +220,7 @@ class AdminUserListView(APIView):
             )
 
         serializer = UserListSerializer(queryset, many=True, context={"request": request})
-        return Response({
-            "count": queryset.count(),
-            "users": serializer.data,
-        })
+        return Response({"count": queryset.count(), "users": serializer.data})
 
 
 class AdminUserDetailView(APIView):
@@ -238,17 +243,14 @@ class AdminUserDetailView(APIView):
         user = self._get_user(pk)
         if not user:
             return Response({"detail": "User not found."}, status=404)
-
         if user == request.user:
             return Response({"detail": "Admins cannot modify their own account via this endpoint."}, status=403)
 
         allowed_fields = {"role", "status", "first_name", "last_name", "email"}
         update_data    = {k: v for k, v in request.data.items() if k in allowed_fields}
 
-
         if "status" in update_data and update_data["status"] not in ("active", "inactive", "banned"):
             return Response({"status": ["Must be one of: active, inactive, banned."]}, status=400)
-
         if "role" in update_data and update_data["role"] not in ("ADMIN", "USER"):
             return Response({"role": ["Must be one of: ADMIN, USER."]}, status=400)
 
@@ -313,47 +315,49 @@ class AdminUserStatsView(APIView):
 
     def get(self, request):
         from django.utils import timezone
-        from datetime import timedelta
 
-        now            = timezone.now()
-        month_start    = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        total          = User.objects.count()
-        admins         = User.objects.filter(role="ADMIN").count()
-        active         = User.objects.filter(status="active").count()
-        inactive       = User.objects.filter(status="inactive").count()
-        banned         = User.objects.filter(status="banned").count()
-        new_this_month = User.objects.filter(date_joined__gte=month_start).count()
+        now         = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
         return Response({
-            "total":          total,
-            "admins":         admins,
-            "active":         active,
-            "inactive":       inactive,
-            "banned":         banned,
-            "new_this_month": new_this_month,
+            "total":          User.objects.count(),
+            "admins":         User.objects.filter(role="ADMIN").count(),
+            "active":         User.objects.filter(status="active").count(),
+            "inactive":       User.objects.filter(status="inactive").count(),
+            "banned":         User.objects.filter(status="banned").count(),
+            "new_this_month": User.objects.filter(date_joined__gte=month_start).count(),
         })
-    
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  LOST REPORTS — USER
+#  USER — REPORTS (LOST + FOUND)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from .models import LostReport, ReportImage
+from .models import LostReport, ReportImage, MatchSuggestion, ClaimRequest, Notification
 from .serializers import (
-    LostReportSerializer,
-    LostReportListSerializer,
-    AdminLostReportSerializer,
+    ReportSerializer,
+    ReportListSerializer,
+    AdminReportSerializer,
+    MatchSuggestionSerializer,
+    ClaimRequestSerializer,
 )
+
+
+def _fire_notification(user, notif_type, title, message, report=None, claim=None):
+    """Helper — creates a Notification row."""
+    Notification.objects.create(
+        user=user,
+        notif_type=notif_type,
+        title=title,
+        message=message,
+        report=report,
+        claim=claim,
+    )
 
 
 class UserReportListCreateView(APIView):
     """
-    GET  /api/reports/         — list the current user's own reports
-    POST /api/reports/         — create a new lost report (+ optional images)
-
-    Images are accepted as multipart/form-data via:
-      images[0], images[1], … images[4]   (up to 5 files)
-    The first uploaded image is automatically flagged as is_main=True.
+    GET  /api/reports/          — current user's reports (?type=lost|found, ?status=)
+    POST /api/reports/          — submit a lost OR found report
     """
     permission_classes = [IsAuthenticated]
 
@@ -364,16 +368,18 @@ class UserReportListCreateView(APIView):
             .prefetch_related('images')
             .order_by('-date_reported')
         )
-        # Optional status filter  ?status=open
+        type_filter   = request.query_params.get('type')
         status_filter = request.query_params.get('status')
+        if type_filter in ('lost', 'found'):
+            qs = qs.filter(report_type=type_filter)
         if status_filter:
             qs = qs.filter(status=status_filter)
 
-        serializer = LostReportListSerializer(qs, many=True, context={'request': request})
+        serializer = ReportListSerializer(qs, many=True, context={'request': request})
         return Response({'count': qs.count(), 'results': serializer.data})
 
     def post(self, request):
-        serializer = LostReportSerializer(data=request.data, context={'request': request})
+        serializer = ReportSerializer(data=request.data, context={'request': request})
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
@@ -390,20 +396,29 @@ class UserReportListCreateView(APIView):
             ReportImage.objects.create(
                 report=report,
                 image=img_file,
-                is_main=(idx == 0),   # first image is the main thumbnail
+                is_main=(idx == 0),
                 order=idx,
             )
 
-        # Return full detail serializer so the client gets image URLs
-        output = LostReportSerializer(report, context={'request': request})
+        # Notify user: report received
+        type_label = "Lost" if report.report_type == "lost" else "Found"
+        _fire_notification(
+            user=request.user,
+            notif_type='report_received',
+            title=f'{type_label} Report Submitted',
+            message=f'Your report for "{report.item_name}" has been received and is now open for review.',
+            report=report,
+        )
+
+        output = ReportSerializer(report, context={'request': request})
         return Response(output.data, status=201)
 
 
 class UserReportDetailView(APIView):
     """
-    GET    /api/reports/<id>/   — view a single report (owner or admin)
-    PATCH  /api/reports/<id>/   — update own report fields (owner only, while open/under_review)
-    DELETE /api/reports/<id>/   — delete own report (owner only, while open)
+    GET    /api/reports/<id>/   — view own report
+    PATCH  /api/reports/<id>/   — edit own report (open or under_review only)
+    DELETE /api/reports/<id>/   — delete own report (open only)
     """
     permission_classes = [IsAuthenticated]
 
@@ -417,30 +432,26 @@ class UserReportDetailView(APIView):
         report = self._get_report(pk, request.user)
         if not report:
             return Response({'detail': 'Report not found.'}, status=404)
-        # Increment view counter
         LostReport.objects.filter(pk=pk).update(views=report.views + 1)
-        serializer = LostReportSerializer(report, context={'request': request})
+        serializer = ReportSerializer(report, context={'request': request})
         return Response(serializer.data)
 
     def patch(self, request, pk):
         report = self._get_report(pk, request.user)
         if not report:
             return Response({'detail': 'Report not found.'}, status=404)
-
-        # Users can only edit while the report is still open or under review
         if report.status not in (LostReport.STATUS_OPEN, LostReport.STATUS_UNDER_REVIEW):
             return Response(
                 {'detail': f"Reports with status '{report.status}' cannot be edited."},
                 status=403,
             )
 
-        serializer = LostReportSerializer(
+        serializer = ReportSerializer(
             report, data=request.data, partial=True,
             context={'request': request},
         )
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
-
         serializer.save()
         return Response({'message': 'Report updated.', 'report': serializer.data})
 
@@ -448,31 +459,137 @@ class UserReportDetailView(APIView):
         report = self._get_report(pk, request.user)
         if not report:
             return Response({'detail': 'Report not found.'}, status=404)
-
-        # Only allow deletion while report is still open
         if report.status != LostReport.STATUS_OPEN:
-            return Response(
-                {'detail': 'Only open reports can be deleted.'},
-                status=403,
-            )
-
+            return Response({'detail': 'Only open reports can be deleted.'}, status=403)
         report.delete()
         return Response({'message': 'Report deleted.'}, status=200)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  LOST REPORTS — ADMIN
+#  USER — CLAIM REQUESTS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class UserClaimCreateView(APIView):
+    """
+    POST /api/reports/<id>/claim/
+    Authenticated user submits a claim request for a found item.
+    The report must be in 'matched' status.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            report = LostReport.objects.get(pk=pk)
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Report not found.'}, status=404)
+
+        if report.status != LostReport.STATUS_MATCHED:
+            return Response(
+                {'detail': 'Claims can only be submitted for matched reports.'},
+                status=400,
+            )
+
+        # Prevent duplicate pending claims from the same user
+        existing = ClaimRequest.objects.filter(
+            report=report,
+            claimant=request.user,
+            status=ClaimRequest.STATUS_PENDING,
+        ).exists()
+        if existing:
+            return Response(
+                {'detail': 'You already have a pending claim for this report.'},
+                status=400,
+            )
+
+        serializer = ClaimRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        claim = serializer.save(report=report, claimant=request.user)
+
+        # Notify the claimant
+        _fire_notification(
+            user=request.user,
+            notif_type='claim_received',
+            title='Claim Submitted',
+            message=f'Your claim for "{report.item_name}" has been submitted and is pending admin review.',
+            report=report,
+            claim=claim,
+        )
+
+        return Response(ClaimRequestSerializer(claim).data, status=201)
+
+
+class UserClaimListView(APIView):
+    """
+    GET /api/claims/
+    Returns all claim requests filed by the current user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        claims = ClaimRequest.objects.filter(claimant=request.user).select_related('report')
+        serializer = ClaimRequestSerializer(claims, many=True)
+        return Response({'count': claims.count(), 'results': serializer.data})
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  USER — NOTIFICATIONS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class UserNotificationListView(APIView):
+    """
+    GET /api/notifications/   — returns user's notifications (newest first)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        notifs = Notification.objects.filter(user=request.user)
+        unread = notifs.filter(is_read=False).count()
+        data = [
+            {
+                'id':         n.id,
+                'type':       n.notif_type,
+                'title':      n.title,
+                'message':    n.message,
+                'is_read':    n.is_read,
+                'report_id':  n.report_id,
+                'claim_id':   n.claim_id,
+                'created_at': n.created_at.isoformat(),
+            }
+            for n in notifs[:50]
+        ]
+        return Response({'unread_count': unread, 'results': data})
+
+
+class UserNotificationReadView(APIView):
+    """
+    POST /api/notifications/<id>/read/   — mark one notification as read
+    POST /api/notifications/read-all/    — mark all as read
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk=None):
+        if pk:
+            try:
+                n = Notification.objects.get(pk=pk, user=request.user)
+                n.is_read = True
+                n.save(update_fields=['is_read'])
+            except Notification.DoesNotExist:
+                return Response({'detail': 'Not found.'}, status=404)
+        else:
+            Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+        return Response({'message': 'Marked as read.'})
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ADMIN — REPORTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class AdminReportListView(APIView):
     """
     GET /api/admin/reports/
-    Returns all reports across all users with optional filters:
-      ?status=open|under_review|matched|claimed|closed|rejected
-      ?category=Electronics|Keys|…
-      ?urgent=true
-      ?search=<text>   (searches item_name, location, username)
-      ?ordering=date|-date|views|-views
+    ?type=lost|found  ?status=  ?category=  ?urgent=true  ?search=  ?ordering=
     """
     permission_classes = [IsAdminUserRole]
 
@@ -484,13 +601,15 @@ class AdminReportListView(APIView):
             .order_by('-date_reported')
         )
 
-        # Filters
+        type_f     = request.query_params.get('type')
         status_f   = request.query_params.get('status')
         category_f = request.query_params.get('category')
         urgent_f   = request.query_params.get('urgent')
         search_f   = request.query_params.get('search', '').strip()
         ordering_f = request.query_params.get('ordering', '-date_reported')
 
+        if type_f in ('lost', 'found'):
+            qs = qs.filter(report_type=type_f)
         if status_f:
             qs = qs.filter(status=status_f)
         if category_f:
@@ -509,15 +628,15 @@ class AdminReportListView(APIView):
         if ordering_f in allowed_orderings:
             qs = qs.order_by(ordering_f)
 
-        serializer = AdminLostReportSerializer(qs, many=True, context={'request': request})
+        serializer = AdminReportSerializer(qs, many=True, context={'request': request})
         return Response({'count': qs.count(), 'results': serializer.data})
 
 
 class AdminReportDetailView(APIView):
     """
-    GET    /api/admin/reports/<id>/   — view any report in full
-    PATCH  /api/admin/reports/<id>/   — update status, admin_notes, or any field
-    DELETE /api/admin/reports/<id>/   — hard-delete a report
+    GET    /api/admin/reports/<id>/
+    PATCH  /api/admin/reports/<id>/   — update status, admin_notes, matched_report
+    DELETE /api/admin/reports/<id>/
     """
     permission_classes = [IsAdminUserRole]
 
@@ -531,7 +650,7 @@ class AdminReportDetailView(APIView):
         report = self._get_report(pk)
         if not report:
             return Response({'detail': 'Report not found.'}, status=404)
-        serializer = AdminLostReportSerializer(report, context={'request': request})
+        serializer = AdminReportSerializer(report, context={'request': request})
         return Response(serializer.data)
 
     def patch(self, request, pk):
@@ -539,7 +658,6 @@ class AdminReportDetailView(APIView):
         if not report:
             return Response({'detail': 'Report not found.'}, status=404)
 
-        # Validate status if provided
         new_status = request.data.get('status')
         if new_status:
             valid_statuses = [s[0] for s in LostReport.STATUS_CHOICES]
@@ -549,14 +667,20 @@ class AdminReportDetailView(APIView):
                     status=400,
                 )
 
-        serializer = AdminLostReportSerializer(
+        old_status = report.status
+
+        serializer = AdminReportSerializer(
             report, data=request.data, partial=True,
             context={'request': request},
         )
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
-
         serializer.save()
+
+        # Fire notifications on status transitions
+        if new_status and new_status != old_status:
+            _handle_status_notification(report, new_status)
+
         return Response({'message': 'Report updated.', 'report': serializer.data})
 
     def delete(self, request, pk):
@@ -567,11 +691,48 @@ class AdminReportDetailView(APIView):
         return Response({'message': f"Report #{pk} deleted."}, status=200)
 
 
+def _handle_status_notification(report, new_status):
+    """Fire the right notification when admin changes a report status."""
+    notif_map = {
+        'under_review': (
+            'under_review',
+            'Report Under Review',
+            f'Your report for "{report.item_name}" is now being reviewed by our team.',
+        ),
+        'matched': (
+            'matched',
+            'Possible Match Found!',
+            f'Great news! A possible match was found for your "{report.item_name}" report. An admin will reach out shortly.',
+        ),
+        'claimed': (
+            'claim_approved',
+            'Item Claimed',
+            f'Your item "{report.item_name}" has been marked as claimed.',
+        ),
+        'closed': (
+            'report_closed',
+            'Report Closed',
+            f'Your report for "{report.item_name}" has been closed.',
+        ),
+        'rejected': (
+            'report_rejected',
+            'Report Rejected',
+            f'Your report for "{report.item_name}" was rejected. Please check admin notes for details.',
+        ),
+    }
+    if new_status in notif_map:
+        notif_type, title, message = notif_map[new_status]
+        _fire_notification(
+            user=report.user,
+            notif_type=notif_type,
+            title=title,
+            message=message,
+            report=report,
+        )
+
+
 class AdminReportStatsView(APIView):
-    """
-    GET /api/admin/reports/stats/
-    Returns aggregate counts for the reports dashboard stat cards.
-    """
+    """GET /api/admin/reports/stats/"""
     permission_classes = [IsAdminUserRole]
 
     def get(self, request):
@@ -580,24 +741,209 @@ class AdminReportStatsView(APIView):
         now         = tz.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        total          = LostReport.objects.count()
-        open_count     = LostReport.objects.filter(status='open').count()
-        under_review   = LostReport.objects.filter(status='under_review').count()
-        matched        = LostReport.objects.filter(status='matched').count()
-        claimed        = LostReport.objects.filter(status='claimed').count()
-        closed         = LostReport.objects.filter(status='closed').count()
-        rejected       = LostReport.objects.filter(status='rejected').count()
-        urgent         = LostReport.objects.filter(is_urgent=True).count()
-        new_this_month = LostReport.objects.filter(date_reported__gte=month_start).count()
+        return Response({
+            'total':          LostReport.objects.count(),
+            'lost':           LostReport.objects.filter(report_type='lost').count(),
+            'found':          LostReport.objects.filter(report_type='found').count(),
+            'open':           LostReport.objects.filter(status='open').count(),
+            'under_review':   LostReport.objects.filter(status='under_review').count(),
+            'matched':        LostReport.objects.filter(status='matched').count(),
+            'claimed':        LostReport.objects.filter(status='claimed').count(),
+            'closed':         LostReport.objects.filter(status='closed').count(),
+            'rejected':       LostReport.objects.filter(status='rejected').count(),
+            'urgent':         LostReport.objects.filter(is_urgent=True).count(),
+            'new_this_month': LostReport.objects.filter(date_reported__gte=month_start).count(),
+        })
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ADMIN — CLAIMS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class AdminClaimListView(APIView):
+    """GET /api/admin/claims/   ?status=pending|approved|rejected"""
+    permission_classes = [IsAdminUserRole]
+
+    def get(self, request):
+        qs = ClaimRequest.objects.select_related('report', 'claimant').order_by('-date_submitted')
+        status_f = request.query_params.get('status')
+        if status_f in ('pending', 'approved', 'rejected'):
+            qs = qs.filter(status=status_f)
+        serializer = ClaimRequestSerializer(qs, many=True)
+        return Response({'count': qs.count(), 'results': serializer.data})
+
+
+class AdminClaimDetailView(APIView):
+    """
+    GET   /api/admin/claims/<id>/
+    PATCH /api/admin/claims/<id>/   — approve or reject
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def _get_claim(self, pk):
+        try:
+            return ClaimRequest.objects.select_related('report', 'claimant').get(pk=pk)
+        except ClaimRequest.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        claim = self._get_claim(pk)
+        if not claim:
+            return Response({'detail': 'Claim not found.'}, status=404)
+        return Response(ClaimRequestSerializer(claim).data)
+
+    def patch(self, request, pk):
+        claim = self._get_claim(pk)
+        if not claim:
+            return Response({'detail': 'Claim not found.'}, status=404)
+
+        new_status     = request.data.get('status')
+        admin_response = request.data.get('admin_response', '')
+
+        if new_status not in ('approved', 'rejected'):
+            return Response(
+                {'status': ['Must be "approved" or "rejected".']},
+                status=400,
+            )
+
+        claim.status         = new_status
+        claim.admin_response = admin_response
+        claim.save(update_fields=['status', 'admin_response', 'date_updated'])
+
+        if new_status == 'approved':
+            # Set the report to claimed
+            claim.report.status = LostReport.STATUS_CLAIMED
+            claim.report.save(update_fields=['status', 'date_updated'])
+
+            _fire_notification(
+                user=claim.claimant,
+                notif_type='claim_approved',
+                title='Claim Approved!',
+                message=f'Your claim for "{claim.report.item_name}" has been approved. Please coordinate with the finder.',
+                report=claim.report,
+                claim=claim,
+            )
+        else:
+            _fire_notification(
+                user=claim.claimant,
+                notif_type='claim_rejected',
+                title='Claim Rejected',
+                message=f'Your claim for "{claim.report.item_name}" was rejected. Reason: {admin_response or "See admin notes."}',
+                report=claim.report,
+                claim=claim,
+            )
+
+        return Response({'message': f'Claim {new_status}.', 'claim': ClaimRequestSerializer(claim).data})
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ADMIN — AI MATCHING ENGINE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class AdminMatchRunView(APIView):
+    """
+    POST /api/admin/match/run/<report_id>/
+    Runs the AI matching engine against a single report.
+    Works for both lost and found reports:
+      - If report is lost  → searches found reports for matches
+      - If report is found → searches lost reports for matches
+    Returns up to 5 scored suggestions.
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def post(self, request, pk):
+        try:
+            report = LostReport.objects.get(pk=pk)
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Report not found.'}, status=404)
+
+        from .matching import find_matches
+        suggestions = find_matches(report, top_n=5)
+
+        results = MatchSuggestionSerializer(suggestions, many=True).data
+        return Response({
+            'report_id': pk,
+            'report_type': report.report_type,
+            'matches_found': len(results),
+            'suggestions': results,
+        })
+
+
+class AdminMatchConfirmView(APIView):
+    """
+    POST /api/admin/match/confirm/<suggestion_id>/
+    Admin confirms a match suggestion.
+    - Sets suggestion status to 'confirmed'
+    - Sets both reports to 'matched'
+    - Links them via matched_report FK
+    - Fires notifications to both report owners
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def post(self, request, pk):
+        try:
+            suggestion = MatchSuggestion.objects.select_related(
+                'lost_report__user', 'found_report__user'
+            ).get(pk=pk)
+        except MatchSuggestion.DoesNotExist:
+            return Response({'detail': 'Suggestion not found.'}, status=404)
+
+        if suggestion.status == MatchSuggestion.STATUS_CONFIRMED:
+            return Response({'detail': 'Already confirmed.'}, status=400)
+
+        # Update suggestion
+        suggestion.status = MatchSuggestion.STATUS_CONFIRMED
+        suggestion.save(update_fields=['status', 'updated_at'])
+
+        # Link and update both reports
+        lost  = suggestion.lost_report
+        found = suggestion.found_report
+
+        lost.status         = LostReport.STATUS_MATCHED
+        lost.matched_report = found
+        lost.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+        found.status         = LostReport.STATUS_MATCHED
+        found.matched_report = lost
+        found.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+        # Notify the owner of the lost item
+        _fire_notification(
+            user=lost.user,
+            notif_type='matched',
+            title='Match Found for Your Lost Item!',
+            message=f'A found item matching your "{lost.item_name}" report has been identified. An admin will contact you to arrange the return.',
+            report=lost,
+        )
+
+        # Notify the finder
+        _fire_notification(
+            user=found.user,
+            notif_type='matched',
+            title='Owner Found for the Item You Reported!',
+            message = f'We have matched your found item "{found.item_name}" with its owner. An admin will contact you shortly.',
+            report=found,
+        )
 
         return Response({
-            'total':          total,
-            'open':           open_count,
-            'under_review':   under_review,
-            'matched':        matched,
-            'claimed':        claimed,
-            'closed':         closed,
-            'rejected':       rejected,
-            'urgent':         urgent,
-            'new_this_month': new_this_month,
+            'message': 'Match confirmed. Both reports updated to matched.',
+            'suggestion': MatchSuggestionSerializer(suggestion).data,
         })
+
+
+class AdminMatchDismissView(APIView):
+    """
+    POST /api/admin/match/dismiss/<suggestion_id>/
+    Admin dismisses a suggestion — marks it as not a real match.
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def post(self, request, pk):
+        try:
+            suggestion = MatchSuggestion.objects.get(pk=pk)
+        except MatchSuggestion.DoesNotExist:
+            return Response({'detail': 'Suggestion not found.'}, status=404)
+
+        suggestion.status = MatchSuggestion.STATUS_DISMISSED
+        suggestion.save(update_fields=['status', 'updated_at'])
+        return Response({'message': 'Suggestion dismissed.'})

@@ -66,7 +66,6 @@ class LoginSerializer(serializers.Serializer):
         }
 
 
-
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model        = UserProfile
@@ -94,7 +93,6 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return instance
 
 
-
 class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(required=False)
 
@@ -107,7 +105,6 @@ class UserSerializer(serializers.ModelSerializer):
         ]
 
     def to_representation(self, instance):
-
         self.fields["profile"].context.update(self.context)
         return super().to_representation(instance)
 
@@ -127,16 +124,10 @@ class UserSerializer(serializers.ModelSerializer):
         return instance
 
 
-
 class UserListSerializer(serializers.ModelSerializer):
-    """
-    Serializer for GET /admin/users/
-    Returns a nested `profile` object so the frontend ApiUser type is satisfied:
-      { phone_number, address, bio, avatar }
-    """
     profile = serializers.SerializerMethodField()
-    reports = serializers.SerializerMethodField()   
-    claims  = serializers.SerializerMethodField()   
+    reports = serializers.SerializerMethodField()
+    claims  = serializers.SerializerMethodField()
 
     class Meta:
         model  = User
@@ -169,25 +160,19 @@ class UserListSerializer(serializers.ModelSerializer):
         }
 
     def get_reports(self, obj):
-    
-        return 0
+        return obj.reports.count()
 
     def get_claims(self, obj):
+        return obj.claim_requests.count()
 
-        return 0
-    
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  LOST REPORT SERIALIZERS
+#  REPORT SERIALIZERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-from .models import LostReport, ReportImage
+from .models import LostReport, ReportImage, MatchSuggestion, ClaimRequest
 
 
 class ReportImageSerializer(serializers.ModelSerializer):
-    """
-    Serializes a single image row.
-    Returns the absolute URL of the image file.
-    """
     image_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -203,25 +188,19 @@ class ReportImageSerializer(serializers.ModelSerializer):
             return None
 
 
-class LostReportSerializer(serializers.ModelSerializer):
+class ReportSerializer(serializers.ModelSerializer):
     """
-    Full serializer used for:
-      • GET  /api/reports/          (list — read)
-      • GET  /api/reports/<id>/     (detail — read)
-      • POST /api/reports/          (create — write)
-      • PATCH /api/reports/<id>/    (partial update — write)
+    Full serializer for both lost and found reports.
 
-    Read fields (populated automatically, not accepted in POST/PATCH):
-      user_info, images, image_count, status, admin_notes,
-      views, date_reported, date_updated
+    Read-only: user_info, images, image_count, status, admin_notes,
+               views, date_reported, date_updated, matched_report_id
 
-    Write fields (accepted in POST body):
-      item_name, category, location, date_lost, description,
-      location_detail, time_lost, brand, color,
-      distinguishing_features, reward, contact_phone, is_urgent
+    User-writable: report_type, item_name, category, location,
+                   date_event, description, location_detail, time_event,
+                   brand, color, distinguishing_features, reward,
+                   contact_phone, is_urgent, found_stored_at
     """
 
-    # ── Read-only computed / related fields ───────────────────────────────
     images      = ReportImageSerializer(many=True, read_only=True)
     image_count = serializers.IntegerField(read_only=True)
     user_info   = serializers.SerializerMethodField()
@@ -229,26 +208,24 @@ class LostReportSerializer(serializers.ModelSerializer):
     class Meta:
         model  = LostReport
         fields = [
-            # identity
             'id',
-            # reporter (read-only, set from request.user in view)
             'user_info',
-            # REQUIRED by user
+            'report_type',
             'item_name',
             'category',
             'location',
-            'date_lost',
+            'date_event',
             'description',
-            # OPTIONAL by user
             'location_detail',
-            'time_lost',
+            'time_event',
             'brand',
             'color',
             'distinguishing_features',
             'reward',
             'contact_phone',
             'is_urgent',
-            # admin-only / auto fields
+            'found_stored_at',
+            'matched_report',
             'status',
             'admin_notes',
             'views',
@@ -259,13 +236,13 @@ class LostReportSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'user_info',
+            'matched_report',
             'status', 'admin_notes',
             'views', 'image_count', 'images',
             'date_reported', 'date_updated',
         ]
 
     def get_user_info(self, obj):
-        """Minimal reporter snapshot — avoids exposing sensitive user data."""
         u = obj.user
         return {
             'id':       u.id,
@@ -273,7 +250,12 @@ class LostReportSerializer(serializers.ModelSerializer):
             'name':     f"{u.first_name} {u.last_name}".strip() or u.username,
         }
 
-    # ── Validation ────────────────────────────────────────────────────────
+    def validate_report_type(self, value):
+        valid = [t[0] for t in LostReport.TYPE_CHOICES]
+        if value not in valid:
+            raise serializers.ValidationError(f"Must be one of: {', '.join(valid)}")
+        return value
+
     def validate_item_name(self, value):
         if not value.strip():
             raise serializers.ValidationError("Item name cannot be blank.")
@@ -294,10 +276,10 @@ class LostReportSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Location cannot be blank.")
         return value.strip()
 
-    def validate_date_lost(self, value):
+    def validate_date_event(self, value):
         from django.utils.timezone import now
         if value > now().date():
-            raise serializers.ValidationError("Date lost cannot be in the future.")
+            raise serializers.ValidationError("Date cannot be in the future.")
         return value
 
     def validate_description(self, value):
@@ -305,22 +287,16 @@ class LostReportSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Description cannot be blank.")
         if len(value.strip()) < 20:
             raise serializers.ValidationError(
-                "Description must be at least 20 characters so finders have enough context."
+                "Description must be at least 20 characters."
             )
         return value.strip()
 
-    # ── Create ────────────────────────────────────────────────────────────
     def create(self, validated_data):
-        # user is injected by the view via serializer.save(user=request.user)
         return LostReport.objects.create(**validated_data)
 
 
-class LostReportListSerializer(serializers.ModelSerializer):
-    """
-    Lightweight serializer for list views — excludes heavy fields
-    (full images list, admin_notes, distinguishing_features)
-    to keep paginated responses fast.
-    """
+class ReportListSerializer(serializers.ModelSerializer):
+    """Lightweight list serializer — no heavy fields."""
     main_image  = serializers.SerializerMethodField()
     user_info   = serializers.SerializerMethodField()
     image_count = serializers.IntegerField(read_only=True)
@@ -330,10 +306,11 @@ class LostReportListSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'user_info',
+            'report_type',
             'item_name',
             'category',
             'location',
-            'date_lost',
+            'date_event',
             'date_reported',
             'status',
             'is_urgent',
@@ -363,20 +340,19 @@ class LostReportListSerializer(serializers.ModelSerializer):
             return None
 
 
-class AdminLostReportSerializer(LostReportSerializer):
+class AdminReportSerializer(ReportSerializer):
     """
-    Extends the base serializer for admin endpoints.
-    Unlocks admin_notes as a writable field and exposes full user details.
+    Admin serializer — unlocks status, admin_notes, matched_report as writable.
+    Also returns extended user_info (email, phone).
     """
     user_info = serializers.SerializerMethodField()
 
-    class Meta(LostReportSerializer.Meta):
+    class Meta(ReportSerializer.Meta):
         read_only_fields = [
             'id', 'user_info',
             'views', 'image_count', 'images',
             'date_reported', 'date_updated',
         ]
-        # admin can write: status, admin_notes + all user-writable fields
 
     def get_user_info(self, obj):
         u = obj.user
@@ -393,29 +369,97 @@ class AdminLostReportSerializer(LostReportSerializer):
         }
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  MATCH SUGGESTION SERIALIZERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class MatchSuggestionSerializer(serializers.ModelSerializer):
+    lost_report_summary  = serializers.SerializerMethodField()
+    found_report_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = MatchSuggestion
+        fields = [
+            'id',
+            'lost_report', 'lost_report_summary',
+            'found_report', 'found_report_summary',
+            'score', 'score_breakdown', 'confidence',
+            'status',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'lost_report_summary', 'found_report_summary',
+            'score', 'score_breakdown', 'confidence',
+            'created_at', 'updated_at',
+        ]
+
+    def get_lost_report_summary(self, obj):
+        r = obj.lost_report
+        return {
+            'id': r.id, 'item_name': r.item_name,
+            'category': r.category, 'location': r.location,
+            'date_event': str(r.date_event), 'status': r.status,
+        }
+
+    def get_found_report_summary(self, obj):
+        r = obj.found_report
+        return {
+            'id': r.id, 'item_name': r.item_name,
+            'category': r.category, 'location': r.location,
+            'date_event': str(r.date_event), 'status': r.status,
+        }
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  CLAIM REQUEST SERIALIZERS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class ClaimRequestSerializer(serializers.ModelSerializer):
+    claimant_info = serializers.SerializerMethodField()
+    report_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = ClaimRequest
+        fields = [
+            'id',
+            'report', 'report_summary',
+            'claimant', 'claimant_info',
+            'proof_description',
+            'status', 'admin_response',
+            'date_submitted', 'date_updated',
+        ]
+        read_only_fields = [
+            'id', 'claimant', 'claimant_info', 'report_summary',
+            'status', 'admin_response',
+            'date_submitted', 'date_updated',
+        ]
+
+    def get_claimant_info(self, obj):
+        u = obj.claimant
+        return {
+            'id': u.id, 'username': u.username,
+            'name': f"{u.first_name} {u.last_name}".strip() or u.username,
+            'email': u.email,
+        }
+
+    def get_report_summary(self, obj):
+        r = obj.report
+        return {
+            'id': r.id, 'item_name': r.item_name,
+            'report_type': r.report_type, 'status': r.status,
+        }
+
+    def validate_proof_description(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Proof description cannot be blank.")
+        if len(value.strip()) < 20:
+            raise serializers.ValidationError(
+                "Please provide at least 20 characters describing your proof of ownership."
+            )
+        return value.strip()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# Keep old names as aliases so existing imports don't break
+LostReportSerializer     = ReportSerializer
+LostReportListSerializer = ReportListSerializer
+AdminLostReportSerializer = AdminReportSerializer

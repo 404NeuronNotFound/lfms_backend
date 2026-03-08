@@ -58,45 +58,59 @@ class UserProfile(models.Model):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  LOST REPORT
+#  REPORT  (Lost + Found in one table)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class LostReport(models.Model):
     """
-    A report filed by a user when they have lost an item.
+    Unified report model for both LOST and FOUND items.
+
+    report_type
+    ───────────
+    'lost'  → user lost an item and is looking for it
+    'found' → user found an item and is looking for its owner
+
+    Status lifecycle
+    ────────────────
+    lost flow:
+      open → under_review → matched → claimed → closed
+                          ↘ rejected
+
+    found flow:
+      open → under_review → matched → claimed → closed
+                          ↘ rejected
 
     Field nullability guide
     ───────────────────────
-    REQUIRED (cannot be null/blank — validation will reject missing values):
-      user            — must always belong to a real authenticated user
-      item_name       — the core identifier of the report
-      category        — needed for search and filtering
-      location        — where it was lost; critical for matching
-      date_lost       — when it was lost; critical for matching
-      description     — minimum useful context for finders
+    REQUIRED always:
+      user, report_type, item_name, category, location,
+      date_event (date lost OR date found), description
 
-    OPTIONAL (null/blank=True — these fields are genuinely not always known):
-      location_detail — more specific spot (e.g. "near escalator"); best-effort
-      time_lost       — many users don't know the exact time
-      brand           — not all items have a brand (handmade, generic items)
-      color           — may be multicolored, patterned, or irrelevant
-      distinguishing  — unique marks; not every item has them
-      reward          — entirely the user's choice; most won't offer one
-      contact_phone   — user may prefer in-app messaging only
-      is_urgent       — defaults False; user opts in to urgent flagging
-      admin_notes     — filled by admins during review; not always needed
-      status          — defaults 'open'; managed by admin workflow
-      views           — auto-tracked counter; defaults 0
-      date_reported   — auto-set on creation (server-side)
-      date_updated    — auto-set on every save (server-side)
+    OPTIONAL (nullable):
+      location_detail, time_event, brand, color,
+      distinguishing_features, reward, contact_phone,
+      is_urgent, admin_notes
+
+    Found-specific optional:
+      found_location  — where the item is being kept now
     """
 
-    STATUS_OPEN          = 'open'
-    STATUS_UNDER_REVIEW  = 'under_review'
-    STATUS_MATCHED       = 'matched'
-    STATUS_CLAIMED       = 'claimed'
-    STATUS_CLOSED        = 'closed'
-    STATUS_REJECTED      = 'rejected'
+    # ── Report type ──────────────────────────────────────────────────────
+    TYPE_LOST  = 'lost'
+    TYPE_FOUND = 'found'
+
+    TYPE_CHOICES = (
+        (TYPE_LOST,  'Lost'),
+        (TYPE_FOUND, 'Found'),
+    )
+
+    # ── Status choices ──────────────────────────────────────────────────
+    STATUS_OPEN         = 'open'
+    STATUS_UNDER_REVIEW = 'under_review'
+    STATUS_MATCHED      = 'matched'
+    STATUS_CLAIMED      = 'claimed'
+    STATUS_CLOSED       = 'closed'
+    STATUS_REJECTED     = 'rejected'
 
     STATUS_CHOICES = (
         (STATUS_OPEN,         'Open'),
@@ -107,6 +121,7 @@ class LostReport(models.Model):
         (STATUS_REJECTED,     'Rejected'),
     )
 
+    # ── Category choices ────────────────────────────────────────────────
     CATEGORY_CHOICES = (
         ('Electronics',    'Electronics'),
         ('Wallets & Bags', 'Wallets & Bags'),
@@ -119,11 +134,22 @@ class LostReport(models.Model):
         ('Other',          'Other'),
     )
 
+    # ── Relationships ────────────────────────────────────────────────────
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
-        related_name='lost_reports',
+        related_name='reports',           # changed from 'lost_reports'
     )
+
+    # ── REQUIRED fields ───────────────────────────────────────────────────
+    report_type = models.CharField(
+        max_length=10,
+        choices=TYPE_CHOICES,
+        default=TYPE_LOST,
+        db_index=True,
+        # NOT NULL — determines the entire workflow branch
+    )
+
     item_name = models.CharField(
         max_length=150,
     )
@@ -136,20 +162,27 @@ class LostReport(models.Model):
 
     location = models.CharField(
         max_length=255,
+        # For lost: where it was lost
+        # For found: where it was found
     )
 
-    date_lost = models.DateField(
+    date_event = models.DateField(
+        # Replaces date_lost — works for both lost and found reports
+        # For lost: the date the item was lost
+        # For found: the date the item was found
     )
 
-    description = models.TextField(
-    )
+    description = models.TextField()
+
+    # ── OPTIONAL enrichment fields ────────────────────────────────────────
     location_detail = models.CharField(
         max_length=255,
         blank=True, null=True,
     )
 
-    time_lost = models.TimeField(
+    time_event = models.TimeField(
         blank=True, null=True,
+        # Replaces time_lost — approximate time of loss or finding
     )
 
     brand = models.CharField(
@@ -169,6 +202,7 @@ class LostReport(models.Model):
     reward = models.CharField(
         max_length=100,
         blank=True, null=True,
+        # Only relevant for lost reports, but kept on the model for simplicity
     )
 
     contact_phone = models.CharField(
@@ -180,6 +214,24 @@ class LostReport(models.Model):
         default=False,
     )
 
+    # ── Found-specific optional field ─────────────────────────────────────
+    found_stored_at = models.CharField(
+        max_length=255,
+        blank=True, null=True,
+        # Where the found item is currently being kept
+        # e.g. "With me at home", "Turned in to mall security office"
+    )
+
+    # ── AI Matching ───────────────────────────────────────────────────────
+    matched_report = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name='matched_by',
+        # Set when admin confirms a match between a lost and found report
+    )
+
+    # ── Admin-managed fields ──────────────────────────────────────────────
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -191,6 +243,7 @@ class LostReport(models.Model):
         blank=True, null=True,
     )
 
+    # ── Auto-managed tracking fields ──────────────────────────────────────
     views = models.PositiveIntegerField(
         default=0,
     )
@@ -204,12 +257,20 @@ class LostReport(models.Model):
     )
 
     class Meta:
-        ordering            = ['-date_reported']   # newest first
-        verbose_name        = 'Lost Report'
-        verbose_name_plural = 'Lost Reports'
+        ordering            = ['-date_reported']
+        verbose_name        = 'Report'
+        verbose_name_plural = 'Reports'
 
     def __str__(self):
-        return f"[{self.status.upper()}] {self.item_name} — {self.user.username}"
+        return f"[{self.report_type.upper()}][{self.status.upper()}] {self.item_name} — {self.user.username}"
+
+    @property
+    def is_lost(self):
+        return self.report_type == self.TYPE_LOST
+
+    @property
+    def is_found(self):
+        return self.report_type == self.TYPE_FOUND
 
     @property
     def is_open(self):
@@ -234,17 +295,7 @@ class LostReport(models.Model):
 
 class ReportImage(models.Model):
     """
-    Stores uploaded images for a LostReport.
-
-    Kept in a separate table so multiple images can attach to one report
-    without resorting to ArrayField or comma-separated values.
-
-    Nullability:
-      report      — NOT NULL: image must belong to a report
-      image       — NOT NULL: the file itself is the entire purpose of this row
-      is_main     — NOT NULL (default False): first/primary image flag
-      order       — NOT NULL (default 0): display sort order (lower = earlier)
-      uploaded_at — NOT NULL (auto): server-side upload timestamp
+    Stores uploaded images for a Report (lost or found).
     """
 
     report = models.ForeignKey(
@@ -275,3 +326,226 @@ class ReportImage(models.Model):
     def __str__(self):
         flag = " [MAIN]" if self.is_main else ""
         return f"Image#{self.pk}{flag} → Report #{self.report_id}"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  MATCH SUGGESTION  (AI matching engine output)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class MatchSuggestion(models.Model):
+    """
+    Stores AI-generated match suggestions between a lost and found report.
+
+    The engine scores pairs and an admin confirms or dismisses each suggestion.
+
+    Status lifecycle:
+      pending   → freshly generated, awaiting admin review
+      confirmed → admin confirmed this match; both reports set to 'matched'
+      dismissed → admin dismissed this suggestion (not a real match)
+    """
+
+    STATUS_PENDING   = 'pending'
+    STATUS_CONFIRMED = 'confirmed'
+    STATUS_DISMISSED = 'dismissed'
+
+    STATUS_CHOICES = (
+        (STATUS_PENDING,   'Pending'),
+        (STATUS_CONFIRMED, 'Confirmed'),
+        (STATUS_DISMISSED, 'Dismissed'),
+    )
+
+    lost_report = models.ForeignKey(
+        LostReport,
+        on_delete=models.CASCADE,
+        related_name='match_suggestions_as_lost',
+        limit_choices_to={'report_type': 'lost'},
+    )
+
+    found_report = models.ForeignKey(
+        LostReport,
+        on_delete=models.CASCADE,
+        related_name='match_suggestions_as_found',
+        limit_choices_to={'report_type': 'found'},
+    )
+
+    score = models.FloatField(
+        # 0.0 – 1.0; computed by matching.py
+    )
+
+    score_breakdown = models.JSONField(
+        default=dict,
+        # Stores per-component scores for transparency:
+        # { "category": 0.35, "name": 0.28, "location": 0.15, "date": 0.10 }
+    )
+
+    confidence = models.CharField(
+        max_length=10,
+        default='low',
+        # 'high' >= 0.75, 'medium' >= 0.50, 'low' < 0.50
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-score']
+        unique_together = [('lost_report', 'found_report')]
+        verbose_name        = 'Match Suggestion'
+        verbose_name_plural = 'Match Suggestions'
+
+    def __str__(self):
+        return f"Match #{self.pk}: Lost#{self.lost_report_id} ↔ Found#{self.found_report_id} [{self.score:.2f}] [{self.status}]"
+
+    @property
+    def confidence_label(self):
+        if self.score >= 0.75:
+            return 'high'
+        if self.score >= 0.50:
+            return 'medium'
+        return 'low'
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  CLAIM REQUEST
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class ClaimRequest(models.Model):
+    """
+    Filed by a user to claim ownership of a found item.
+
+    Only relevant when the related lost report has status 'matched'.
+    Admin reviews the proof and either approves (→ 'claimed') or rejects.
+
+    Status lifecycle:
+      pending  → submitted, awaiting admin review
+      approved → admin verified ownership; report status → 'claimed'
+      rejected → admin rejected the claim; user may re-submit with better proof
+    """
+
+    STATUS_PENDING  = 'pending'
+    STATUS_APPROVED = 'approved'
+    STATUS_REJECTED = 'rejected'
+
+    STATUS_CHOICES = (
+        (STATUS_PENDING,  'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+    )
+
+    report = models.ForeignKey(
+        LostReport,
+        on_delete=models.CASCADE,
+        related_name='claim_requests',
+    )
+
+    claimant = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='claim_requests',
+    )
+
+    proof_description = models.TextField(
+        # User describes how they can prove ownership:
+        # serial number, purchase receipt, unique features, photos, etc.
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+
+    admin_response = models.TextField(
+        blank=True, null=True,
+        # Admin's reason for approving or rejecting
+    )
+
+    date_submitted = models.DateTimeField(auto_now_add=True)
+    date_updated   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-date_submitted']
+        verbose_name        = 'Claim Request'
+        verbose_name_plural = 'Claim Requests'
+
+    def __str__(self):
+        return f"Claim #{self.pk} by {self.claimant.username} on Report #{self.report_id} [{self.status}]"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  NOTIFICATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class Notification(models.Model):
+    """
+    In-app notifications triggered by system events.
+
+    type values and when they fire:
+      report_received  → user submits a report
+      under_review     → admin moves report to under_review
+      matched          → admin confirms a match
+      claim_received   → user submits a claim request
+      claim_approved   → admin approves a claim
+      claim_rejected   → admin rejects a claim
+      report_closed    → report is closed
+      report_rejected  → admin rejects a report
+    """
+
+    TYPE_CHOICES = (
+        ('report_received', 'Report Received'),
+        ('under_review',    'Under Review'),
+        ('matched',         'Matched'),
+        ('claim_received',  'Claim Received'),
+        ('claim_approved',  'Claim Approved'),
+        ('claim_rejected',  'Claim Rejected'),
+        ('report_closed',   'Report Closed'),
+        ('report_rejected', 'Report Rejected'),
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+    )
+
+    notif_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        db_index=True,
+    )
+
+    report = models.ForeignKey(
+        LostReport,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='notifications',
+    )
+
+    claim = models.ForeignKey(
+        ClaimRequest,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='notifications',
+    )
+
+    title   = models.CharField(max_length=150)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name        = 'Notification'
+        verbose_name_plural = 'Notifications'
+
+    def __str__(self):
+        return f"Notif → {self.user.username}: [{self.notif_type}] {self.title}"
