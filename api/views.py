@@ -14,6 +14,7 @@ from .serializers import (
     UserListSerializer,
 )
 from .permissions import IsAdminUserRole
+from django.db import models
 
 User = get_user_model()
 
@@ -947,3 +948,170 @@ class AdminMatchDismissView(APIView):
         suggestion.status = MatchSuggestion.STATUS_DISMISSED
         suggestion.save(update_fields=['status', 'updated_at'])
         return Response({'message': 'Suggestion dismissed.'})
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  PUBLIC — BROWSE FOUND ITEMS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class BrowseFoundItemsView(APIView):
+    """
+    GET /api/found-items/
+    Public listing of all found reports with status=open.
+    ?category=  ?search=  ?ordering=  ?page=  ?page_size=
+    Authentication optional — authenticated users also see if they've
+    already submitted a pending claim for each item.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        qs = (
+            LostReport.objects
+            .filter(report_type='found', status__in=['open', 'under_review', 'matched'])
+            .prefetch_related('images')
+            .select_related('user')
+            .order_by('-date_reported')
+        )
+
+        category_f = request.query_params.get('category', '').strip()
+        search_f   = request.query_params.get('search',   '').strip()
+        ordering_f = request.query_params.get('ordering', '-date_reported')
+
+        if category_f:
+            qs = qs.filter(category=category_f)
+        if search_f:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(item_name__icontains=search_f) |
+                Q(location__icontains=search_f)  |
+                Q(description__icontains=search_f)
+            )
+
+        allowed = {'-date_reported', 'date_reported', '-views', 'views', 'item_name'}
+        if ordering_f in allowed:
+            qs = qs.order_by(ordering_f)
+
+        # Increment views counter tracked per session (simple approach)
+        total = qs.count()
+        serializer = ReportListSerializer(qs, many=True, context={'request': request})
+        data = serializer.data
+
+        # If authenticated, annotate whether user already has a pending claim
+        if request.user and request.user.is_authenticated:
+            my_pending = set(
+                ClaimRequest.objects.filter(
+                    claimant=request.user,
+                    status='pending',
+                ).values_list('report_id', flat=True)
+            )
+            my_approved = set(
+                ClaimRequest.objects.filter(
+                    claimant=request.user,
+                    status='approved',
+                ).values_list('report_id', flat=True)
+            )
+            for item in data:
+                item['my_claim_status'] = (
+                    'approved' if item['id'] in my_approved else
+                    'pending'  if item['id'] in my_pending  else
+                    None
+                )
+        else:
+            for item in data:
+                item['my_claim_status'] = None
+
+        return Response({'count': total, 'results': data})
+
+
+class BrowseFoundItemDetailView(APIView):
+    """
+    GET /api/found-items/<id>/
+    Public detail view of a single found report.
+    Increments view counter.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, pk):
+        try:
+            report = (
+                LostReport.objects
+                .filter(report_type='found', status__in=['open', 'under_review', 'matched'])
+                .prefetch_related('images')
+                .select_related('user')
+                .get(pk=pk)
+            )
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=404)
+
+        # Increment view count
+        LostReport.objects.filter(pk=pk).update(views=models.F('views') + 1)
+
+        serializer = ReportSerializer(report, context={'request': request})
+        data = serializer.data
+
+        if request.user and request.user.is_authenticated:
+            pending = ClaimRequest.objects.filter(
+                report=report, claimant=request.user, status='pending'
+            ).exists()
+            approved = ClaimRequest.objects.filter(
+                report=report, claimant=request.user, status='approved'
+            ).exists()
+            data['my_claim_status'] = 'approved' if approved else 'pending' if pending else None
+        else:
+            data['my_claim_status'] = None
+
+        return Response(data)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

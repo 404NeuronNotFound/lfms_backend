@@ -409,7 +409,6 @@ class MatchSuggestionSerializer(serializers.ModelSerializer):
             'date_event': str(r.date_event), 'status': r.status,
         }
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CLAIM REQUEST SERIALIZERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -429,7 +428,7 @@ class ClaimRequestSerializer(serializers.ModelSerializer):
             'date_submitted', 'date_updated',
         ]
         read_only_fields = [
-            'id', 'claimant', 'claimant_info', 'report_summary',
+            'id', 'report', 'claimant', 'claimant_info', 'report_summary',
             'status', 'admin_response',
             'date_submitted', 'date_updated',
         ]
@@ -457,6 +456,7 @@ class ClaimRequestSerializer(serializers.ModelSerializer):
                 "Please provide at least 20 characters describing your proof of ownership."
             )
         return value.strip()
+
 
 
 # Keep old names as aliases so existing imports don't break
