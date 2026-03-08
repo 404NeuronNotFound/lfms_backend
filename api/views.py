@@ -922,7 +922,7 @@ class AdminMatchConfirmView(APIView):
             user=found.user,
             notif_type='matched',
             title='Owner Found for the Item You Reported!',
-            message = f'We have matched your found item "{found.item_name}" with its owner. An admin will contact you shortly.',
+            message=f'We have matched your found "{found.item_name}" report with its owner. An admin will contact you shortly.',
             report=found,
         )
 
@@ -950,6 +950,125 @@ class AdminMatchDismissView(APIView):
         return Response({'message': 'Suggestion dismissed.'})
 
 
+
+class AdminManualMatchView(APIView):
+    """
+    POST /api/admin/match/manual/
+    Admin manually links a lost report and a found report as a confirmed match.
+    No AI suggestion needed — admin does it directly from AllReports.
+
+    Body: { lost_report_id: int, found_report_id: int }
+
+    - Sets both reports status → 'matched'
+    - Links them via matched_report FK
+    - Creates a MatchSuggestion record (confirmed) for audit trail
+    - Fires notifications to both owners
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def post(self, request):
+        lost_id  = request.data.get('lost_report_id')
+        found_id = request.data.get('found_report_id')
+
+        if not lost_id or not found_id:
+            return Response({'detail': 'Both lost_report_id and found_report_id are required.'}, status=400)
+
+        try:
+            lost = LostReport.objects.select_related('user').get(pk=lost_id, report_type='lost')
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Lost report not found.'}, status=404)
+
+        try:
+            found = LostReport.objects.select_related('user').get(pk=found_id, report_type='found')
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Found report not found.'}, status=404)
+
+        if lost.status == LostReport.STATUS_MATCHED:
+            return Response({'detail': 'This lost report is already matched.'}, status=400)
+
+        if found.status == LostReport.STATUS_MATCHED:
+            return Response({'detail': 'This found report is already matched.'}, status=400)
+
+        # Link both reports
+        lost.status         = LostReport.STATUS_MATCHED
+        lost.matched_report = found
+        lost.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+        found.status         = LostReport.STATUS_MATCHED
+        found.matched_report = lost
+        found.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+        # Create a MatchSuggestion record for audit trail (score=1.0 = manual/confirmed)
+        suggestion = MatchSuggestion.objects.create(
+            lost_report=lost,
+            found_report=found,
+            score=1.0,
+            status=MatchSuggestion.STATUS_CONFIRMED,
+        )
+
+        # Notify the owner of the lost item
+        _fire_notification(
+            user=lost.user,
+            notif_type='matched',
+            title='Match Found for Your Lost Item!',
+            message=f'A found item matching your "{lost.item_name}" has been identified. Check Browse Items to submit your claim.',
+            report=lost,
+        )
+
+        # Notify the finder
+        _fire_notification(
+            user=found.user,
+            notif_type='matched',
+            title='Owner Found for the Item You Reported!',
+            message=f'We have matched your found "{found.item_name}" report with its owner. An admin will contact you shortly.',
+            report=found,
+        )
+
+        return Response({
+            'message': 'Reports manually matched successfully.',
+            'lost_report_id':  lost.pk,
+            'found_report_id': found.pk,
+            'suggestion_id':   suggestion.pk,
+        }, status=201)
+
+
+class AdminUnmatchView(APIView):
+    """
+    POST /api/admin/match/unmatch/
+    Admin undoes a manual or AI match, resetting both reports back to open.
+
+    Body: { report_id: int }  — either the lost or found report id
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def post(self, request):
+        report_id = request.data.get('report_id')
+        if not report_id:
+            return Response({'detail': 'report_id is required.'}, status=400)
+
+        try:
+            report = LostReport.objects.select_related('matched_report').get(pk=report_id)
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Report not found.'}, status=404)
+
+        if report.status != LostReport.STATUS_MATCHED:
+            return Response({'detail': 'Report is not currently matched.'}, status=400)
+
+        partner = report.matched_report
+
+        report.status         = LostReport.STATUS_OPEN
+        report.matched_report = None
+        report.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+        if partner:
+            partner.status         = LostReport.STATUS_OPEN
+            partner.matched_report = None
+            partner.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+        return Response({'message': 'Match undone. Both reports reset to open.'})
+
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  PUBLIC — BROWSE FOUND ITEMS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -957,12 +1076,23 @@ class AdminMatchDismissView(APIView):
 class BrowseFoundItemsView(APIView):
     """
     GET /api/found-items/
-    Public listing of all found reports with status=open.
-    ?category=  ?search=  ?ordering=  ?page=  ?page_size=
-    Authentication optional — authenticated users also see if they've
-    already submitted a pending claim for each item.
+    Public listing of all found reports with status=open/under_review/matched.
+    ?category=  ?search=  ?ordering=
+    Authentication optional — if a valid token is present, my_claim_status
+    is populated per item. Invalid/expired tokens are ignored gracefully.
+
+    IMPORTANT: For AllowAny + JWT to coexist without 401 on bad tokens,
+    add to settings.py REST_FRAMEWORK:
+      'DEFAULT_AUTHENTICATION_CLASSES': [
+          'rest_framework_simplejwt.authentication.JWTAuthentication',
+      ]
+    and in SIMPLE_JWT:
+      'AUTH_HEADER_TYPES': ('Bearer',),
+    DRF will skip auth (not reject) if no/invalid token when AllowAny is set,
+    AS LONG AS you don't have UNAUTHENTICATED_USER raising exceptions.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []  # Skip JWT auth entirely for public endpoints
 
     def get(self, request):
         qs = (
@@ -998,24 +1128,20 @@ class BrowseFoundItemsView(APIView):
 
         # If authenticated, annotate whether user already has a pending claim
         if request.user and request.user.is_authenticated:
-            my_pending = set(
-                ClaimRequest.objects.filter(
-                    claimant=request.user,
-                    status='pending',
-                ).values_list('report_id', flat=True)
+            # Get the most recent claim status per report for this user
+            user_claims = (
+                ClaimRequest.objects
+                .filter(claimant=request.user)
+                .order_by('-date_submitted')
+                .values('report_id', 'status')
             )
-            my_approved = set(
-                ClaimRequest.objects.filter(
-                    claimant=request.user,
-                    status='approved',
-                ).values_list('report_id', flat=True)
-            )
+            # Keep only the latest claim per report_id
+            claim_status_map = {}
+            for c in user_claims:
+                if c['report_id'] not in claim_status_map:
+                    claim_status_map[c['report_id']] = c['status']
             for item in data:
-                item['my_claim_status'] = (
-                    'approved' if item['id'] in my_approved else
-                    'pending'  if item['id'] in my_pending  else
-                    None
-                )
+                item['my_claim_status'] = claim_status_map.get(item['id'], None)
         else:
             for item in data:
                 item['my_claim_status'] = None
@@ -1030,6 +1156,7 @@ class BrowseFoundItemDetailView(APIView):
     Increments view counter.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []  # Skip JWT auth entirely for public endpoints
 
     def get(self, request, pk):
         try:
@@ -1050,13 +1177,13 @@ class BrowseFoundItemDetailView(APIView):
         data = serializer.data
 
         if request.user and request.user.is_authenticated:
-            pending = ClaimRequest.objects.filter(
-                report=report, claimant=request.user, status='pending'
-            ).exists()
-            approved = ClaimRequest.objects.filter(
-                report=report, claimant=request.user, status='approved'
-            ).exists()
-            data['my_claim_status'] = 'approved' if approved else 'pending' if pending else None
+            latest_claim = (
+                ClaimRequest.objects
+                .filter(report=report, claimant=request.user)
+                .order_by('-date_submitted')
+                .first()
+            )
+            data['my_claim_status'] = latest_claim.status if latest_claim else None
         else:
             data['my_claim_status'] = None
 

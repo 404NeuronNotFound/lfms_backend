@@ -414,7 +414,7 @@ class MatchSuggestionSerializer(serializers.ModelSerializer):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class ClaimRequestSerializer(serializers.ModelSerializer):
-    claimant_info = serializers.SerializerMethodField()
+    claimant_info  = serializers.SerializerMethodField()
     report_summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -427,11 +427,19 @@ class ClaimRequestSerializer(serializers.ModelSerializer):
             'status', 'admin_response',
             'date_submitted', 'date_updated',
         ]
+        # Only proof_description is writable on POST.
+        # report and claimant are injected via serializer.save() in the view.
         read_only_fields = [
-            'id', 'report', 'claimant', 'claimant_info', 'report_summary',
-            'status', 'admin_response',
+            'id',
+            'report',    'report_summary',
+            'claimant',  'claimant_info',
+            'status',    'admin_response',
             'date_submitted', 'date_updated',
         ]
+
+    def validate(self, data):
+        # Ensure only proof_description reaches validated_data
+        return {'proof_description': data.get('proof_description', '')}
 
     def get_claimant_info(self, obj):
         u = obj.claimant

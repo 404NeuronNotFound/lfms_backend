@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import User, UserProfile, LostReport, ReportImage
+from .models import User, UserProfile, LostReport, ReportImage, MatchSuggestion, Notification
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -17,3 +17,10 @@ class LostReportAdmin(admin.ModelAdmin):
 class ReportImageAdmin(admin.ModelAdmin):
     pass
 
+@admin.register(MatchSuggestion)
+class MatchSuggestionAdmin(admin.ModelAdmin):
+    pass
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    pass

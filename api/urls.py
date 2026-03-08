@@ -44,6 +44,9 @@ from .views import (
     # Public — browse found items
     BrowseFoundItemsView,
     BrowseFoundItemDetailView,
+    # Admin — manual match
+    AdminManualMatchView,
+    AdminUnmatchView,
 )
 
 urlpatterns = [
@@ -105,6 +108,11 @@ urlpatterns = [
     path("admin/match/run/<int:pk>/",         AdminMatchRunView.as_view(),     name="admin_match_run"),
     path("admin/match/confirm/<int:pk>/",     AdminMatchConfirmView.as_view(), name="admin_match_confirm"),
     path("admin/match/dismiss/<int:pk>/",     AdminMatchDismissView.as_view(), name="admin_match_dismiss"),
+
+    # ── Manual match ───────────────────────────────────────────────────────
+    path("admin/match/manual/",  AdminManualMatchView.as_view(), name="admin_manual_match"),
+    path("admin/match/unmatch/", AdminUnmatchView.as_view(),     name="admin_unmatch"),
+
     # ── Public: browse found items ─────────────────────────────────────────
     path("found-items/",          BrowseFoundItemsView.as_view(),       name="browse_found_items"),
     path("found-items/<int:pk>/", BrowseFoundItemDetailView.as_view(),  name="browse_found_item_detail"),
