@@ -443,10 +443,19 @@ class ClaimRequestSerializer(serializers.ModelSerializer):
 
     def get_claimant_info(self, obj):
         u = obj.claimant
+        request = self.context.get('request')
+        avatar_url = None
+        try:
+            if u.profile and u.profile.avatar:
+                url = u.profile.avatar.url
+                avatar_url = request.build_absolute_uri(url) if request else url
+        except Exception:
+            pass
         return {
             'id': u.id, 'username': u.username,
             'name': f"{u.first_name} {u.last_name}".strip() or u.username,
             'email': u.email,
+            'avatar': avatar_url,
         }
 
     def get_report_summary(self, obj):
@@ -466,8 +475,73 @@ class ClaimRequestSerializer(serializers.ModelSerializer):
         return value.strip()
 
 
-
 # Keep old names as aliases so existing imports don't break
 LostReportSerializer     = ReportSerializer
 LostReportListSerializer = ReportListSerializer
 AdminLostReportSerializer = AdminReportSerializer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

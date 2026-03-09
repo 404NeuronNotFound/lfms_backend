@@ -545,7 +545,7 @@ class UserClaimCreateView(APIView):
             claim=claim,
         )
 
-        return Response(ClaimRequestSerializer(claim).data, status=201)
+        return Response(ClaimRequestSerializer(claim, context={'request': request}).data, status=201)
 
 
 class UserClaimListView(APIView):
@@ -813,11 +813,11 @@ class AdminClaimListView(APIView):
     permission_classes = [IsAdminUserRole]
 
     def get(self, request):
-        qs = ClaimRequest.objects.select_related('report', 'claimant').order_by('-date_submitted')
+        qs = ClaimRequest.objects.select_related('report', 'claimant', 'claimant__profile').order_by('-date_submitted')
         status_f = request.query_params.get('status')
         if status_f in ('pending', 'approved', 'rejected'):
             qs = qs.filter(status=status_f)
-        serializer = ClaimRequestSerializer(qs, many=True)
+        serializer = ClaimRequestSerializer(qs, many=True, context={'request': request})
         return Response({'count': qs.count(), 'results': serializer.data})
 
 
@@ -830,7 +830,7 @@ class AdminClaimDetailView(APIView):
 
     def _get_claim(self, pk):
         try:
-            return ClaimRequest.objects.select_related('report', 'claimant').get(pk=pk)
+            return ClaimRequest.objects.select_related('report', 'claimant', 'claimant__profile').get(pk=pk)
         except ClaimRequest.DoesNotExist:
             return None
 
@@ -838,7 +838,7 @@ class AdminClaimDetailView(APIView):
         claim = self._get_claim(pk)
         if not claim:
             return Response({'detail': 'Claim not found.'}, status=404)
-        return Response(ClaimRequestSerializer(claim).data)
+        return Response(ClaimRequestSerializer(claim, context={'request': request}).data)
 
     def patch(self, request, pk):
         claim = self._get_claim(pk)
@@ -899,7 +899,7 @@ class AdminClaimDetailView(APIView):
                 claim=claim,
             )
 
-        return Response({'message': f'Claim {new_status}.', 'claim': ClaimRequestSerializer(claim).data})
+        return Response({'message': f'Claim {new_status}.', 'claim': ClaimRequestSerializer(claim, context={'request': request}).data})
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
