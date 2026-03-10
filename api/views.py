@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+import re
 from rest_framework import permissions, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -497,9 +498,9 @@ class UserClaimCreateView(APIView):
                 status=400,
             )
 
-        if report.status not in (LostReport.STATUS_OPEN, LostReport.STATUS_UNDER_REVIEW, LostReport.STATUS_MATCHED):
+        if report.status != LostReport.STATUS_MATCHED:
             return Response(
-                {'detail': 'This item is no longer available for claiming.'},
+                {'detail': 'This item can only be claimed once an admin has matched it with a lost report.'},
                 status=400,
             )
 
@@ -906,25 +907,32 @@ class AdminClaimDetailView(APIView):
 #  ADMIN — AI MATCHING ENGINE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-class AdminMatchRunView(APIView):
+class AdminMatchSuggestionsView(APIView):
     """
-    POST /api/admin/match/run/<report_id>/
-    Runs the AI matching engine against a single report.
-    Works for both lost and found reports:
-      - If report is lost  → searches found reports for matches
-      - If report is found → searches lost reports for matches
-    Returns up to 5 scored suggestions.
+    GET /api/admin/match/suggestions/<report_id>/
+    Returns existing (non-dismissed) suggestions for a report without re-running the engine.
+    Useful to restore the panel state after opening/closing the drawer.
     """
     permission_classes = [IsAdminUserRole]
 
-    def post(self, request, pk):
+    def get(self, request, pk):
         try:
             report = LostReport.objects.get(pk=pk)
         except LostReport.DoesNotExist:
             return Response({'detail': 'Report not found.'}, status=404)
 
-        from .matching import find_matches
-        suggestions = find_matches(report, top_n=5)
+        if report.report_type == 'lost':
+            suggestions = MatchSuggestion.objects.filter(
+                lost_report=report,
+            ).exclude(status=MatchSuggestion.STATUS_DISMISSED).select_related(
+                'lost_report', 'found_report'
+            ).order_by('-score')
+        else:
+            suggestions = MatchSuggestion.objects.filter(
+                found_report=report,
+            ).exclude(status=MatchSuggestion.STATUS_DISMISSED).select_related(
+                'lost_report', 'found_report'
+            ).order_by('-score')
 
         results = MatchSuggestionSerializer(suggestions, many=True).data
         return Response({
@@ -935,59 +943,260 @@ class AdminMatchRunView(APIView):
         })
 
 
-class AdminMatchConfirmView(APIView):
+class AdminMatchRunView(APIView):
     """
-    POST /api/admin/match/confirm/<suggestion_id>/
-    Admin confirms a match suggestion.
-    - Sets suggestion status to 'confirmed'
-    - Sets both reports to 'matched'
-    - Links them via matched_report FK
-    - Fires notifications to both report owners
+    POST /api/admin/match/run/<report_id>/
+    Uses Claude AI to score candidate reports against the given report.
+    Returns up to 5 suggestions with scores — NO DB writes until admin confirms.
     """
     permission_classes = [IsAdminUserRole]
 
     def post(self, request, pk):
+        import json, os, urllib.request, urllib.error
+
         try:
-            suggestion = MatchSuggestion.objects.select_related(
-                'lost_report__user', 'found_report__user'
-            ).get(pk=pk)
-        except MatchSuggestion.DoesNotExist:
-            return Response({'detail': 'Suggestion not found.'}, status=404)
+            report = LostReport.objects.get(pk=pk)
+        except LostReport.DoesNotExist:
+            return Response({'detail': 'Report not found.'}, status=404)
 
-        if suggestion.status == MatchSuggestion.STATUS_CONFIRMED:
-            return Response({'detail': 'Already confirmed.'}, status=400)
+        # ── Fetch candidates ──────────────────────────────────────────────
+        ACTIVE = [LostReport.STATUS_OPEN, LostReport.STATUS_UNDER_REVIEW, LostReport.STATUS_MATCHED]
+        if report.report_type == LostReport.TYPE_LOST:
+            candidates = LostReport.objects.filter(report_type=LostReport.TYPE_FOUND, status__in=ACTIVE).exclude(pk=pk)
+        else:
+            candidates = LostReport.objects.filter(report_type=LostReport.TYPE_LOST, status__in=ACTIVE).exclude(pk=pk)
 
-        # Update suggestion
-        suggestion.status = MatchSuggestion.STATUS_CONFIRMED
-        suggestion.save(update_fields=['status', 'updated_at'])
+        if not candidates.exists():
+            return Response({'report_id': pk, 'report_type': report.report_type, 'matches_found': 0, 'suggestions': []})
 
-        # Link and update both reports
-        lost  = suggestion.lost_report
-        found = suggestion.found_report
+        # ── Build prompt ──────────────────────────────────────────────────
+        def report_block(r):
+            return (
+                f"ID: {r.id}\n"
+                f"Type: {r.report_type}\n"
+                f"Item: {r.item_name}\n"
+                f"Category: {r.category}\n"
+                f"Description: {getattr(r, 'description', '') or ''}\n"
+                f"Location: {r.location}\n"
+                f"Date: {r.date_event}\n"
+                f"Status: {r.status}"
+            )
 
-        lost.status         = LostReport.STATUS_MATCHED
-        lost.matched_report = found
-        lost.save(update_fields=['status', 'matched_report', 'date_updated'])
-
-        found.status         = LostReport.STATUS_MATCHED
-        found.matched_report = lost
-        found.save(update_fields=['status', 'matched_report', 'date_updated'])
-
-        # Notify the owner of the lost item
-        _fire_notification(
-            user=lost.user,
-            notif_type='matched',
-            title='Match Found for Your Lost Item!',
-            message=f'A found item matching your "{lost.item_name}" report has been identified. An admin will contact you to arrange the return.',
-            report=lost,
+        candidates_text = "\n\n".join(
+            f"--- Candidate {i+1} ---\n{report_block(c)}"
+            for i, c in enumerate(candidates[:20])  # cap at 20 to keep prompt small
         )
 
-        # Notify the finder
+        system_prompt = """You are a lost-and-found matching assistant for a Filipino university/mall system.
+Your job is to compare a query report against candidate reports and score how likely they are the same item.
+
+Reports may be written in English, Bisaya (Cebuano), Tagalog, or a mix.
+Common Bisaya terms: nawala=lost, nakita/nakit-an=found, selpon/telepono=phone, pitaka=wallet,
+susi/yabi=key, pula=red, itom=black, puti=white, asul=blue, berde=green, gamay=small, dako=big,
+bag-o=new, daan/luma=old, guba/sira=broken, eskwelahan=school, palengke=market, simbahan=church.
+
+Score each candidate 0.0–1.0 based on:
+- category: same type of item? (0 or 1)
+- name: how similar are the item names? (0–1)
+- description: how similar are the descriptions? (0–1, use 0.3 if either is blank)
+- location: same or nearby location? (0–1)
+- date: how close are the dates? same day=1.0, each day apart reduces score, >10 days=0
+
+Return ONLY valid JSON — no markdown, no explanation — in this exact format:
+{
+  "suggestions": [
+    {
+      "candidate_id": <int>,
+      "score": <float 0-1>,
+      "confidence": "<high|medium|low>",
+      "reasoning": "<one short sentence in English>",
+      "breakdown": {
+        "category": <float>,
+        "name": <float>,
+        "description": <float>,
+        "location": <float>,
+        "date": <float>
+      }
+    }
+  ]
+}
+
+Rules:
+- Include only candidates with score >= 0.25
+- Sort by score descending
+- Return at most 5 suggestions
+- confidence: high >= 0.72, medium >= 0.48, low < 0.48
+- If category is different, cap total score at 0.42"""
+
+        user_prompt = f"""QUERY REPORT (the one we are matching FOR):
+{report_block(report)}
+
+CANDIDATES (possible matches):
+{candidates_text}
+
+Score each candidate against the query report and return JSON."""
+
+        # ── Call Claude API ───────────────────────────────────────────────
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            # Fallback to local engine if no API key configured
+            from .matching import find_matches
+            suggestions_qs = find_matches(report, top_n=5)
+            results = MatchSuggestionSerializer(suggestions_qs, many=True).data
+            return Response({'report_id': pk, 'report_type': report.report_type,
+                             'matches_found': len(results), 'suggestions': results})
+
+        payload = json.dumps({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 1024,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = json.loads(resp.read())
+            ai_text = raw["content"][0]["text"].strip()
+            # Strip any accidental markdown fences
+            ai_text = re.sub(r"^```[a-z]*\n?", "", ai_text, flags=re.MULTILINE)
+            ai_text = re.sub(r"\n?```$", "", ai_text, flags=re.MULTILINE)
+            ai_result = json.loads(ai_text)
+        except Exception as e:
+            # Fallback to local engine on any API error
+            from .matching import find_matches
+            suggestions_qs = find_matches(report, top_n=5)
+            results = MatchSuggestionSerializer(suggestions_qs, many=True).data
+            return Response({'report_id': pk, 'report_type': report.report_type,
+                             'matches_found': len(results), 'suggestions': results,
+                             'ai_error': str(e)})
+
+        # ── Build response in the same shape as MatchSuggestionSerializer ─
+        # We DON'T write to DB here — only write on confirm.
+        # We map candidate_id back to real report objects for summaries.
+        candidate_map = {c.id: c for c in candidates[:20]}
+
+        def report_summary(r):
+            return {
+                'id': r.id, 'item_name': r.item_name,
+                'category': r.category, 'location': r.location,
+                'date_event': str(r.date_event), 'status': r.status,
+            }
+
+        suggestions_out = []
+        for s in ai_result.get("suggestions", [])[:5]:
+            cid = s.get("candidate_id")
+            candidate = candidate_map.get(cid)
+            if not candidate:
+                continue
+
+            lost_r  = report   if report.report_type   == LostReport.TYPE_LOST  else candidate
+            found_r = candidate if report.report_type   == LostReport.TYPE_LOST  else report
+
+            # Look up existing MatchSuggestion row (if any) so confirm still works
+            existing = MatchSuggestion.objects.filter(
+                lost_report=lost_r, found_report=found_r
+            ).first()
+
+            suggestions_out.append({
+                'id':                  existing.pk if existing else None,
+                'lost_report':         lost_r.pk,
+                'found_report':        found_r.pk,
+                'lost_report_summary':  report_summary(lost_r),
+                'found_report_summary': report_summary(found_r),
+                'score':               round(float(s.get("score", 0)), 4),
+                'confidence':          s.get("confidence", "low"),
+                'reasoning':           s.get("reasoning", ""),
+                'score_breakdown':     s.get("breakdown", {}),
+                'status':              existing.status if existing else 'pending',
+            })
+
+        return Response({
+            'report_id':     pk,
+            'report_type':   report.report_type,
+            'matches_found': len(suggestions_out),
+            'suggestions':   suggestions_out,
+        })
+
+
+class AdminMatchConfirmView(APIView):
+    """
+    POST /api/admin/match/confirm/<suggestion_id>/
+    Two modes:
+    A) pk > 0  -> normal: look up existing MatchSuggestion by PK
+    B) pk == 0 -> AI path: body must contain lost_report_id, found_report_id,
+                  score, confidence, score_breakdown. Creates the row on-the-fly.
+    """
+    permission_classes = [IsAdminUserRole]
+
+    def post(self, request, pk):
+        from django.db import transaction
+
+        with transaction.atomic():
+            if pk == 0:
+                lost_id  = request.data.get('lost_report_id')
+                found_id = request.data.get('found_report_id')
+                if not lost_id or not found_id:
+                    return Response({'detail': 'lost_report_id and found_report_id required.'}, status=400)
+                try:
+                    lost  = LostReport.objects.select_related('user').get(pk=lost_id)
+                    found = LostReport.objects.select_related('user').get(pk=found_id)
+                except LostReport.DoesNotExist:
+                    return Response({'detail': 'Report not found.'}, status=404)
+                suggestion, _ = MatchSuggestion.objects.get_or_create(
+                    lost_report=lost,
+                    found_report=found,
+                    defaults={
+                        'score':           float(request.data.get('score', 1.0)),
+                        'score_breakdown': request.data.get('score_breakdown', {}),
+                        'confidence':      request.data.get('confidence', 'high'),
+                        'status':          MatchSuggestion.STATUS_PENDING,
+                    },
+                )
+            else:
+                try:
+                    suggestion = MatchSuggestion.objects.select_related(
+                        'lost_report__user', 'found_report__user'
+                    ).get(pk=pk)
+                except MatchSuggestion.DoesNotExist:
+                    return Response({'detail': 'Suggestion not found.'}, status=404)
+                lost  = suggestion.lost_report
+                found = suggestion.found_report
+
+            if suggestion.status == MatchSuggestion.STATUS_CONFIRMED:
+                return Response({'detail': 'Already confirmed.'}, status=400)
+
+            suggestion.status = MatchSuggestion.STATUS_CONFIRMED
+            suggestion.save(update_fields=['status', 'updated_at'])
+
+            lost.status         = LostReport.STATUS_MATCHED
+            lost.matched_report = found
+            lost.save(update_fields=['status', 'matched_report', 'date_updated'])
+
+            found.status         = LostReport.STATUS_MATCHED
+            found.matched_report = lost
+            found.save(update_fields=['status', 'matched_report', 'date_updated'])
+
         _fire_notification(
-            user=found.user,
-            notif_type='matched',
+            user=lost.user, notif_type='matched',
+            title='Match Found for Your Lost Item!',
+            message=f'A found item matching your "{lost.item_name}" has been identified. An admin will contact you.',
+            report=lost,
+        )
+        _fire_notification(
+            user=found.user, notif_type='matched',
             title='Owner Found for the Item You Reported!',
-            message=f'We have matched your found "{found.item_name}" report with its owner. An admin will contact you shortly.',
+            message=f'We matched your found "{found.item_name}" with its owner. An admin will contact you shortly.',
             report=found,
         )
 
@@ -995,7 +1204,6 @@ class AdminMatchConfirmView(APIView):
             'message': 'Match confirmed. Both reports updated to matched.',
             'suggestion': MatchSuggestionSerializer(suggestion).data,
         })
-
 
 class AdminMatchDismissView(APIView):
     """

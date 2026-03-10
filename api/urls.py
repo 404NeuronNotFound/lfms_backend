@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
 from .views import (
     # Auth
+    AdminMatchSuggestionsView,
     RegisterView,
     LoginView,
     LogoutView,
@@ -105,9 +106,11 @@ urlpatterns = [
     path("admin/claims/<int:pk>/",   AdminClaimDetailView.as_view(), name="admin_claim_detail"),
 
     # ── Admin: AI matching engine ─────────────────────────────────────────
-    path("admin/match/run/<int:pk>/",         AdminMatchRunView.as_view(),     name="admin_match_run"),
-    path("admin/match/confirm/<int:pk>/",     AdminMatchConfirmView.as_view(), name="admin_match_confirm"),
-    path("admin/match/dismiss/<int:pk>/",     AdminMatchDismissView.as_view(), name="admin_match_dismiss"),
+    # ── Admin: AI matching engine ─────────────────────────────────────────
+    path("admin/match/run/<int:pk>/",         AdminMatchRunView.as_view(),         name="admin_match_run"),
+    path("admin/match/confirm/<int:pk>/",     AdminMatchConfirmView.as_view(),     name="admin_match_confirm"),
+    path("admin/match/dismiss/<int:pk>/",     AdminMatchDismissView.as_view(),     name="admin_match_dismiss"),
+    path("admin/match/suggestions/<int:pk>/", AdminMatchSuggestionsView.as_view(), name="admin_match_suggestions"),
 
     # ── Manual match ───────────────────────────────────────────────────────
     path("admin/match/manual/",  AdminManualMatchView.as_view(), name="admin_manual_match"),

@@ -318,6 +318,7 @@ class ReportListSerializer(serializers.ModelSerializer):
             'views',
             'image_count',
             'main_image',
+            'matched_report',
         ]
 
     def get_user_info(self, obj):
@@ -409,6 +410,7 @@ class MatchSuggestionSerializer(serializers.ModelSerializer):
             'date_event': str(r.date_event), 'status': r.status,
         }
 
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  CLAIM REQUEST SERIALIZERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -479,69 +481,3 @@ class ClaimRequestSerializer(serializers.ModelSerializer):
 LostReportSerializer     = ReportSerializer
 LostReportListSerializer = ReportListSerializer
 AdminLostReportSerializer = AdminReportSerializer
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
