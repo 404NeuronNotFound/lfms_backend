@@ -500,6 +500,7 @@ class Notification(models.Model):
     """
 
     TYPE_CHOICES = (
+        # ── user-facing ──
         ('report_received', 'Report Received'),
         ('under_review',    'Under Review'),
         ('matched',         'Matched'),
@@ -508,6 +509,9 @@ class Notification(models.Model):
         ('claim_rejected',  'Claim Rejected'),
         ('report_closed',   'Report Closed'),
         ('report_rejected', 'Report Rejected'),
+        # ── admin-facing ──
+        ('new_report',      'New Report Submitted'),
+        ('new_claim',       'New Claim Submitted'),
     )
 
     user = models.ForeignKey(
@@ -549,3 +553,85 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"Notif → {self.user.username}: [{self.notif_type}] {self.title}"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

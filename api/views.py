@@ -413,6 +413,16 @@ class UserReportListCreateView(APIView):
             report=report,
         )
 
+        # Notify all admins: new report submitted
+        for admin_user in User.objects.filter(role='ADMIN'):
+            _fire_notification(
+                user=admin_user,
+                notif_type='new_report',
+                title=f'New {type_label} Report',
+                message=f'{request.user.get_full_name() or request.user.username} submitted a {report.report_type} report for \"{report.item_name}\" at {report.location}.',
+                report=report,
+            )
+
         output = ReportSerializer(report, context={'request': request})
         return Response(output.data, status=201)
 
@@ -545,6 +555,17 @@ class UserClaimCreateView(APIView):
             report=report,
             claim=claim,
         )
+
+        # Notify all admins: new claim needs review
+        for admin_user in User.objects.filter(role='ADMIN'):
+            _fire_notification(
+                user=admin_user,
+                notif_type='new_claim',
+                title='New Claim Requires Review',
+                message=f'{request.user.get_full_name() or request.user.username} submitted a claim for \"{report.item_name}\". Review it in Admin Claims.',
+                report=report,
+                claim=claim,
+            )
 
         return Response(ClaimRequestSerializer(claim, context={'request': request}).data, status=201)
 
