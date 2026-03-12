@@ -68,7 +68,183 @@ class AdminDashboard(APIView):
     permission_classes = [IsAdminUserRole]
 
     def get(self, request):
-        return Response({"message": "Welcome Admin!"})
+        from django.utils import timezone
+        from django.db.models import Count, Avg, Q
+        from collections import defaultdict
+        import datetime
+
+        User = get_user_model()
+        now  = timezone.now()
+
+        # ── Time windows ──────────────────────────────────────────────────────
+        start_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start_last_month = (start_this_month - datetime.timedelta(days=1)).replace(day=1)
+        week_start       = now - datetime.timedelta(days=6)   # last 7 days incl. today
+
+        # ── Lazy import models (registered below the auth section) ────────────
+        from .models import LostReport, ClaimRequest
+
+        # ─── REPORT STATS ────────────────────────────────────────────────────
+        total_reports_all     = LostReport.objects.count()
+        total_reports_this    = LostReport.objects.filter(date_reported__gte=start_this_month).count()
+        total_reports_last    = LostReport.objects.filter(
+            date_reported__gte=start_last_month,
+            date_reported__lt=start_this_month,
+        ).count()
+
+        # Recovery = claimed reports
+        claimed_all    = LostReport.objects.filter(status="claimed").count()
+        claimed_this   = LostReport.objects.filter(status="claimed", date_reported__gte=start_this_month).count()
+        claimed_last   = LostReport.objects.filter(
+            status="claimed",
+            date_reported__gte=start_last_month,
+            date_reported__lt=start_this_month,
+        ).count()
+
+        # Pending claims
+        pending_claims_now  = ClaimRequest.objects.filter(status="pending").count()
+        pending_claims_last = ClaimRequest.objects.filter(
+            status="pending",
+            date_submitted__gte=start_last_month,
+            date_submitted__lt=start_this_month,
+        ).count()
+
+        # Active users
+        active_users_now  = User.objects.filter(status="active").count()
+        active_users_last = User.objects.filter(
+            status="active",
+            date_joined__gte=start_last_month,
+            date_joined__lt=start_this_month,
+        ).count()
+
+        def delta(current, previous):
+            if previous == 0:
+                return 100.0 if current > 0 else 0.0
+            return round((current - previous) / previous * 100, 1)
+
+        # ── WEEKLY ACTIVITY (last 7 days) ────────────────────────────────────
+        day_labels = []
+        day_counts = defaultdict(int)
+        for i in range(6, -1, -1):
+            d = (now - datetime.timedelta(days=i)).date()
+            day_labels.append(d)
+
+        reports_last_week = LostReport.objects.filter(
+            date_reported__date__gte=day_labels[0],
+        ).values_list("date_reported", flat=True)
+
+        for dt in reports_last_week:
+            day_counts[dt.date()] += 1
+
+        weekly_activity = [
+            {
+                "day":   d.strftime("%a"),
+                "count": day_counts.get(d, 0),
+            }
+            for d in day_labels
+        ]
+
+        # ── TOP LOCATIONS (top 5 by report count) ────────────────────────────
+        top_locs_qs = (
+            LostReport.objects
+            .values("location")
+            .annotate(count=Count("id"))
+            .order_by("-count")[:5]
+        )
+        top_locations = [{"name": row["location"], "count": row["count"]} for row in top_locs_qs]
+
+        # ── RECENT REPORTS (last 7) ───────────────────────────────────────────
+        recent_qs = LostReport.objects.select_related("user").order_by("-date_reported")[:7]
+        recent_reports = []
+        for r in recent_qs:
+            # Best match score from pending suggestions
+            best_score = None
+            try:
+                from .models import MatchSuggestion
+                suggestion = MatchSuggestion.objects.filter(
+                    Q(lost_report=r) | Q(found_report=r),
+                    status="pending",
+                ).order_by("-score").first()
+                if suggestion:
+                    best_score = round(suggestion.score * 100)
+            except Exception:
+                pass
+
+            recent_reports.append({
+                "id":            r.id,
+                "item_name":     r.item_name,
+                "report_type":   r.report_type,
+                "location":      r.location,
+                "date_reported": r.date_reported.isoformat(),
+                "status":        r.status,
+                "match_score":   best_score,
+                "username":      r.user.username if r.user else "—",
+            })
+
+        # ── RECENT USERS (last 4 joined) ──────────────────────────────────────
+        recent_users_qs = User.objects.select_related("profile").order_by("-date_joined")[:4]
+        recent_users = []
+        for u in recent_users_qs:
+            avatar = None
+            try:
+                if u.profile and u.profile.avatar:
+                    avatar = request.build_absolute_uri(u.profile.avatar.url)
+            except Exception:
+                pass
+            recent_users.append({
+                "id":          u.id,
+                "full_name":   f"{u.first_name} {u.last_name}".strip() or u.username,
+                "username":    u.username,
+                "role":        u.role,
+                "date_joined": u.date_joined.isoformat(),
+                "reports":     LostReport.objects.filter(user=u).count(),
+                "avatar":      avatar,
+            })
+
+        # ── RECOVERY BREAKDOWN ────────────────────────────────────────────────
+        matched_count = LostReport.objects.filter(status="matched").count()
+        open_count    = LostReport.objects.filter(status__in=["open", "under_review"]).count()
+        recovery_rate = round(claimed_all / total_reports_all * 100, 1) if total_reports_all else 0
+
+        return Response({
+            "stats": {
+                "total_reports": {
+                    "label":     "Total Reports",
+                    "value":     total_reports_all,
+                    "delta_pct": delta(total_reports_this, total_reports_last),
+                    "sub":       "vs last month",
+                },
+                "items_recovered": {
+                    "label":     "Items Recovered",
+                    "value":     claimed_all,
+                    "delta_pct": delta(claimed_this, claimed_last),
+                    "sub":       "vs last month",
+                },
+                "pending_claims": {
+                    "label":     "Pending Claims",
+                    "value":     pending_claims_now,
+                    "delta_pct": delta(pending_claims_now, pending_claims_last),
+                    "sub":       "needs review",
+                },
+                "active_users": {
+                    "label":     "Active Users",
+                    "value":     active_users_now,
+                    "delta_pct": delta(active_users_now, active_users_last),
+                    "sub":       "registered accounts",
+                },
+            },
+            "weekly_activity":    weekly_activity,
+            "top_locations":      top_locations,
+            "recent_reports":     recent_reports,
+            "recent_users":       recent_users,
+            "recovery_rate":      recovery_rate,
+            "recovery_breakdown": {
+                "claimed": claimed_all,
+                "matched": matched_count,
+                "pending": open_count,
+            },
+            "total_reports": total_reports_all,
+        })
 
 
 class UserDashboard(APIView):
@@ -1060,12 +1236,13 @@ Score each candidate against the query report and return JSON."""
         # ── Call Claude API ───────────────────────────────────────────────
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
-            # Fallback to local engine if no API key configured
-            from .matching import find_matches
-            suggestions_qs = find_matches(report, top_n=5)
-            results = MatchSuggestionSerializer(suggestions_qs, many=True).data
-            return Response({'report_id': pk, 'report_type': report.report_type,
-                             'matches_found': len(results), 'suggestions': results})
+            return Response({
+                'report_id': pk,
+                'report_type': report.report_type,
+                'matches_found': 0,
+                'suggestions': [],
+                'ai_error': 'ANTHROPIC_API_KEY is not configured on the server. Set the environment variable and restart Django.',
+            }, status=503)
 
         payload = json.dumps({
             "model": "claude-haiku-4-5-20251001",
@@ -1094,13 +1271,13 @@ Score each candidate against the query report and return JSON."""
             ai_text = re.sub(r"\n?```$", "", ai_text, flags=re.MULTILINE)
             ai_result = json.loads(ai_text)
         except Exception as e:
-            # Fallback to local engine on any API error
-            from .matching import find_matches
-            suggestions_qs = find_matches(report, top_n=5)
-            results = MatchSuggestionSerializer(suggestions_qs, many=True).data
-            return Response({'report_id': pk, 'report_type': report.report_type,
-                             'matches_found': len(results), 'suggestions': results,
-                             'ai_error': str(e)})
+            return Response({
+                'report_id': pk,
+                'report_type': report.report_type,
+                'matches_found': 0,
+                'suggestions': [],
+                'ai_error': f'Claude API error: {str(e)}',
+            }, status=502)
 
         # ── Build response in the same shape as MatchSuggestionSerializer ─
         # We DON'T write to DB here — only write on confirm.
