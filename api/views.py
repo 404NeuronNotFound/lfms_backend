@@ -255,7 +255,122 @@ class UserDashboard(APIView):
             return Response({"detail": "Your account has been banned."}, status=403)
         if request.user.status == "inactive":
             return Response({"detail": "Your account is deactivated."}, status=403)
-        return Response({"message": "Welcome!"})
+
+        from django.utils import timezone
+        from .models import LostReport, ClaimRequest, Notification
+        import datetime
+
+        user = request.user
+        now  = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # ── Report counts ──────────────────────────────────────────────────
+        user_reports       = LostReport.objects.filter(user=user)
+        total_reports      = user_reports.count()
+        open_reports       = user_reports.filter(status__in=["open", "under_review"]).count()
+        matched_reports    = user_reports.filter(status="matched").count()
+        claimed_reports    = user_reports.filter(status="claimed").count()
+        reports_this_month = user_reports.filter(date_reported__gte=month_start).count()
+
+        # ── Claim counts ───────────────────────────────────────────────────
+        user_claims     = ClaimRequest.objects.filter(claimant=user)
+        total_claims    = user_claims.count()
+        pending_claims  = user_claims.filter(status="pending").count()
+        approved_claims = user_claims.filter(status="approved").count()
+
+        # ── Unread notifications ───────────────────────────────────────────
+        unread_notifs = Notification.objects.filter(user=user, is_read=False).count()
+
+        # ── Recent reports (last 5) ────────────────────────────────────────
+        recent_reports_qs = user_reports.order_by("-date_reported")[:5]
+        recent_reports = []
+        for r in recent_reports_qs:
+            best_score = None
+            try:
+                from .models import MatchSuggestion
+                from django.db.models import Q
+                sugg = MatchSuggestion.objects.filter(
+                    Q(lost_report=r) | Q(found_report=r), status="pending"
+                ).order_by("-score").first()
+                if sugg:
+                    best_score = round(sugg.score * 100)
+            except Exception:
+                pass
+
+            recent_reports.append({
+                "id":             r.id,
+                "item_name":      r.item_name,
+                "report_type":    r.report_type,
+                "category":       r.category,
+                "location":       r.location,
+                "status":         r.status,
+                "date_reported":  r.date_reported.isoformat(),
+                "is_urgent":      r.is_urgent,
+                "match_score":    best_score,
+            })
+
+        # ── Recent claims (last 3) ─────────────────────────────────────────
+        recent_claims_qs = user_claims.select_related("report").order_by("-date_submitted")[:3]
+        recent_claims = []
+        for c in recent_claims_qs:
+            recent_claims.append({
+                "id":             c.id,
+                "item_name":      c.report.item_name if c.report else "—",
+                "report_type":    c.report.report_type if c.report else "found",
+                "status":         c.status,
+                "date_submitted": c.date_submitted.isoformat(),
+                "admin_response": c.admin_response,
+            })
+
+        # ── Recent notifications (last 4, unread first) ───────────────────
+        recent_notifs_qs = Notification.objects.filter(
+            user=user
+        ).order_by("is_read", "-created_at")[:4]
+        recent_notifs = [
+            {
+                "id":         n.id,
+                "type":       n.notif_type,
+                "title":      n.title,
+                "message":    n.message,
+                "is_read":    n.is_read,
+                "created_at": n.created_at.isoformat(),
+            }
+            for n in recent_notifs_qs
+        ]
+
+        # ── Avatar ─────────────────────────────────────────────────────────
+        avatar = None
+        try:
+            if user.profile and user.profile.avatar:
+                avatar = request.build_absolute_uri(user.profile.avatar.url)
+        except Exception:
+            pass
+
+        return Response({
+            "user": {
+                "id":          user.id,
+                "username":    user.username,
+                "full_name":   f"{user.first_name} {user.last_name}".strip() or user.username,
+                "first_name":  user.first_name,
+                "email":       user.email,
+                "date_joined": user.date_joined.isoformat(),
+                "avatar":      avatar,
+            },
+            "stats": {
+                "total_reports":      total_reports,
+                "open_reports":       open_reports,
+                "matched_reports":    matched_reports,
+                "claimed_reports":    claimed_reports,
+                "reports_this_month": reports_this_month,
+                "total_claims":       total_claims,
+                "pending_claims":     pending_claims,
+                "approved_claims":    approved_claims,
+                "unread_notifs":      unread_notifs,
+            },
+            "recent_reports": recent_reports,
+            "recent_claims":  recent_claims,
+            "recent_notifs":  recent_notifs,
+        })
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
