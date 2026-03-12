@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
 from .views import (
     # Auth
+    AdminAuditLogView,
     AdminMatchSuggestionsView,
     RegisterView,
     LoginView,
@@ -119,4 +120,6 @@ urlpatterns = [
     # ── Public: browse found items ─────────────────────────────────────────
     path("found-items/",          BrowseFoundItemsView.as_view(),       name="browse_found_items"),
     path("found-items/<int:pk>/", BrowseFoundItemDetailView.as_view(),  name="browse_found_item_detail"),
+
+    path("admin/audit-logs/", AdminAuditLogView.as_view(), name="admin_audit_logs")
 ]

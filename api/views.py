@@ -41,6 +41,14 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
+            from django.contrib.auth import get_user_model
+            _User = get_user_model()
+            try:
+                u = _User.objects.get(username=request.data.get("username", ""))
+                _log("login", actor=u, actor_type="admin" if u.role == "ADMIN" else "user",
+                     detail=f"Login: @{u.username}", request=request)
+            except Exception:
+                pass
             return Response(serializer.validated_data, status=200)
         return Response(serializer.errors, status=400)
 
@@ -57,6 +65,9 @@ class LogoutView(APIView):
             token.blacklist()
         except (TokenError, InvalidToken):
             pass
+        _log("logout", actor=request.user,
+             actor_type="admin" if request.user.role == "ADMIN" else "user",
+             detail=f"Logout: @{request.user.username}", request=request)
         return Response({"message": "Logged out successfully."}, status=205)
 
 
@@ -562,6 +573,8 @@ class AdminUserDetailView(APIView):
         if user == request.user:
             return Response({"detail": "You cannot delete your own account via admin."}, status=403)
         username = user.username
+        _log("user_deleted", actor=request.user, actor_type="admin",
+             detail=f"Deleted account @{username}", request=request)
         user.delete()
         return Response({"message": f"User '{username}' has been deleted."}, status=200)
 
@@ -584,6 +597,8 @@ class AdminBanUserView(APIView):
 
         user.status = "banned"
         user.save(update_fields=["status"])
+        _log("user_banned", actor=request.user, actor_type="admin",
+             target_user=user, detail=f"Banned @{user.username}", request=request)
         return Response({"message": f"User '{user.username}' has been banned."}, status=200)
 
 
@@ -601,6 +616,8 @@ class AdminUnbanUserView(APIView):
 
         user.status = "active"
         user.save(update_fields=["status"])
+        _log("user_unbanned", actor=request.user, actor_type="admin",
+             target_user=user, detail=f"Unbanned @{user.username}", request=request)
         return Response({"message": f"User '{user.username}' has been unbanned."}, status=200)
 
 
@@ -703,6 +720,10 @@ class UserReportListCreateView(APIView):
             message=f'Your report for "{report.item_name}" has been received and is now open for review.',
             report=report,
         )
+
+        # Audit log: report created
+        _log('report_created', actor=request.user, report=report,
+             detail=f'Created {report.report_type} report: {report.item_name}', request=request)
 
         # Notify all admins: new report submitted
         for admin_user in User.objects.filter(role='ADMIN'):
@@ -836,6 +857,10 @@ class UserClaimCreateView(APIView):
                 LostReport.objects.filter(pk=report.matched_report_id).update(
                     status=LostReport.STATUS_UNDER_REVIEW
                 )
+
+        # Audit log: claim submitted
+        _log('claim_submitted', actor=request.user, claim=claim, report=report,
+             detail=f'Claim on report #{report.id}: {report.item_name}', request=request)
 
         # Notify the claimant
         _fire_notification(
@@ -1184,6 +1209,9 @@ class AdminClaimDetailView(APIView):
                     if lost_report.status != LostReport.STATUS_CLAIMED:
                         lost_report.status = LostReport.STATUS_CLAIMED
                         lost_report.save(update_fields=['status', 'date_updated'])
+                        _log('claim_approved', actor=request.user, actor_type='admin',
+                             claim=claim, target_user=claim.claimant,
+                             detail=f'Approved claim #{claim.id}', request=request)
                         _fire_notification(
                             user=lost_report.user,
                             notif_type='claim_approved',
@@ -1203,6 +1231,9 @@ class AdminClaimDetailView(APIView):
                 claim=claim,
             )
         else:
+            _log('claim_rejected', actor=request.user, actor_type='admin',
+                 claim=claim, target_user=claim.claimant,
+                 detail=f'Rejected claim #{claim.id}', request=request)
             _fire_notification(
                 user=claim.claimant,
                 notif_type='claim_rejected',
@@ -1509,7 +1540,7 @@ class AdminMatchConfirmView(APIView):
         _fire_notification(
             user=found.user, notif_type='matched',
             title='Owner Found for the Item You Reported!',
-            message=f'We matched your found "{found.item_name}" with its owner. An admin will contact you shortly.',
+            message=f"We've matched your found '{found.item_name}' report with its owner. An admin will contact you shortly.",
             report=found,
         )
 
@@ -1606,7 +1637,7 @@ class AdminManualMatchView(APIView):
             user=found.user,
             notif_type='matched',
             title='Owner Found for the Item You Reported!',
-            message=f'We have matched your found "{found.item_name}" report with its owner. An admin will contact you shortly.',
+            message=f"We've matched your found '{found.item_name}' report with its owner. An admin will contact you shortly.",
             report=found,
         )
 
@@ -1776,3 +1807,118 @@ class BrowseFoundItemDetailView(APIView):
             data['is_own_report']   = False
 
         return Response(data)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  AUDIT LOG HELPER + VIEW
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _log(action, actor=None, actor_type="user", target_user=None,
+         report=None, claim=None, detail="", request=None):
+    """Fire-and-forget audit log entry."""
+    try:
+        from .models import AuditLog
+        ip = None
+        if request:
+            x_fwd = request.META.get("HTTP_X_FORWARDED_FOR")
+            ip = x_fwd.split(",")[0].strip() if x_fwd else request.META.get("REMOTE_ADDR")
+        AuditLog.objects.create(
+            action=action, actor=actor, actor_type=actor_type,
+            target_user=target_user, report=report, claim=claim,
+            detail=detail, ip=ip,
+        )
+    except Exception:
+        pass
+
+
+class AdminAuditLogView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != "ADMIN":
+            return Response({"detail": "Forbidden"}, status=403)
+
+        try:
+            from .models import AuditLog
+            from django.db.models import Q
+            from django.utils import timezone
+            from datetime import timedelta
+
+            # ── Filters ───────────────────────────────────────────────────
+            action     = request.query_params.get("action", "")
+            actor_type = request.query_params.get("actor_type", "")
+            search     = request.query_params.get("search", "")
+            date_from  = request.query_params.get("date_from", "")
+            date_to    = request.query_params.get("date_to", "")
+            page       = max(1, int(request.query_params.get("page", 1)))
+            per_page   = min(50, int(request.query_params.get("per_page", 20)))
+
+            qs = AuditLog.objects.select_related("actor", "target_user", "report", "claim")
+
+            if action:
+                qs = qs.filter(action=action)
+            if actor_type:
+                qs = qs.filter(actor_type=actor_type)
+            if search:
+                qs = qs.filter(
+                    Q(actor__username__icontains=search) |
+                    Q(target_user__username__icontains=search) |
+                    Q(detail__icontains=search)
+                )
+            if date_from:
+                qs = qs.filter(created_at__date__gte=date_from)
+            if date_to:
+                qs = qs.filter(created_at__date__lte=date_to)
+
+            total  = qs.count()
+            offset = (page - 1) * per_page
+            logs   = list(qs[offset: offset + per_page])
+
+            # ── Action choices ────────────────────────────────────────────
+            choices = [{"value": v, "label": l} for v, l in AuditLog.ACTION_CHOICES]
+
+            def serialize(log):
+                return {
+                    "id":           log.id,
+                    "action":       log.action,
+                    "actor_type":   log.actor_type,
+                    "actor":        log.actor.username if log.actor else "System",
+                    "actor_id":     log.actor.id       if log.actor else None,
+                    "target_user":     log.target_user.username if log.target_user else None,
+                    "target_user_id":  log.target_user.id       if log.target_user else None,
+                    "report_id":    log.report.id if log.report else None,
+                    "claim_id":     log.claim.id  if log.claim  else None,
+                    "detail":       log.detail,
+                    "ip":           log.ip,
+                    "created_at":   log.created_at.isoformat(),
+                }
+
+            # ── Stats (unfiltered) ────────────────────────────────────────
+            all_qs    = AuditLog.objects
+            today     = timezone.now().date()
+            since_24h = timezone.now() - timedelta(hours=24)
+            stats = {
+                "total":           all_qs.count(),
+                "today":           all_qs.filter(created_at__date=today).count(),
+                "last_24h":        all_qs.filter(created_at__gte=since_24h).count(),
+                "admin_actions":   all_qs.filter(actor_type="admin").count(),
+                "user_actions":    all_qs.filter(actor_type="user").count(),
+                "system_actions":  all_qs.filter(actor_type="system").count(),
+                "security_events": all_qs.filter(action__in=[
+                    "user_banned","user_unbanned","user_deleted",
+                    "role_changed","login","password_change",
+                ]).count(),
+            }
+
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+            return Response({"detail": str(exc)}, status=500)
+
+        return Response({
+            "total":   total,
+            "page":    page,
+            "pages":   max(1, -(-total // per_page)),
+            "results": [serialize(l) for l in logs],
+            "choices": choices,
+            "stats":   stats,
+        })

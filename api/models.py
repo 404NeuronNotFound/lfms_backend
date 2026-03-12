@@ -555,83 +555,60 @@ class Notification(models.Model):
         return f"Notif → {self.user.username}: [{self.notif_type}] {self.title}"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+class AuditLog(models.Model):
+    ACTION_CHOICES = [
+        # Auth
+        ('login',            'User Login'),
+        ('logout',           'User Logout'),
+        ('register',         'User Registered'),
+        ('password_change',  'Password Changed'),
+        # Reports
+        ('report_created',   'Report Created'),
+        ('report_updated',   'Report Updated'),
+        ('report_deleted',   'Report Deleted'),
+        ('report_closed',    'Report Closed'),
+        # Claims
+        ('claim_submitted',  'Claim Submitted'),
+        ('claim_approved',   'Claim Approved'),
+        ('claim_rejected',   'Claim Rejected'),
+        # Matches
+        ('match_confirmed',  'Match Confirmed'),
+        ('match_dismissed',  'Match Dismissed'),
+        ('match_run',        'AI Match Run'),
+        # Users (admin)
+        ('user_banned',      'User Banned'),
+        ('user_unbanned',    'User Unbanned'),
+        ('user_deleted',     'User Deleted'),
+        ('role_changed',     'Role Changed'),
+    ]
+
+    ACTOR_CHOICES = [
+        ('user',   'User'),
+        ('admin',  'Admin'),
+        ('system', 'System'),
+    ]
+
+    action     = models.CharField(max_length=40, choices=ACTION_CHOICES, db_index=True)
+    actor_type = models.CharField(max_length=10, choices=ACTOR_CHOICES, default='user')
+    actor      = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='audit_logs'
+    )
+    target_user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='audit_logs_as_target'
+    )
+    report  = models.ForeignKey('LostReport',   on_delete=models.SET_NULL, null=True, blank=True)
+    claim   = models.ForeignKey('ClaimRequest', on_delete=models.SET_NULL, null=True, blank=True)
+    detail  = models.TextField(blank=True, default='')
+    ip      = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name        = 'Audit Log'
+        verbose_name_plural = 'Audit Logs'
+
+    def __str__(self):
+        actor = self.actor.username if self.actor else 'System'
+        return f"[{self.action}] by {actor} at {self.created_at:%Y-%m-%d %H:%M}"
