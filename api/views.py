@@ -12,7 +12,7 @@ from .models import UserProfile
 from .serializers import (
     RegisterSerializer,
     LoginSerializer,
-    UserSerializer,
+    UserSerializer, 
     UserListSerializer,
 )
 from .permissions import IsAdminUserRole
@@ -1289,188 +1289,86 @@ class AdminMatchSuggestionsView(APIView):
 class AdminMatchRunView(APIView):
     """
     POST /api/admin/match/run/<report_id>/
-    Uses Claude AI to score candidate reports against the given report.
-    Returns up to 5 suggestions with scores — NO DB writes until admin confirms.
+    Runs the local intelligent matching engine against the given report.
+    Returns up to 5 scored suggestions. NO DB writes until admin confirms.
+    No external API required — pure Python, works offline.
     """
     permission_classes = [IsAdminUserRole]
 
     def post(self, request, pk):
-        import json, os, urllib.request, urllib.error
+        from .matching import score_pair, find_matches
 
         try:
             report = LostReport.objects.get(pk=pk)
         except LostReport.DoesNotExist:
-            return Response({'detail': 'Report not found.'}, status=404)
+            return Response({"detail": "Report not found."}, status=404)
 
-        # ── Fetch candidates ──────────────────────────────────────────────
         ACTIVE = [LostReport.STATUS_OPEN, LostReport.STATUS_UNDER_REVIEW, LostReport.STATUS_MATCHED]
         if report.report_type == LostReport.TYPE_LOST:
-            candidates = LostReport.objects.filter(report_type=LostReport.TYPE_FOUND, status__in=ACTIVE).exclude(pk=pk)
+            candidates = LostReport.objects.filter(
+                report_type=LostReport.TYPE_FOUND, status__in=ACTIVE
+            ).exclude(pk=pk)
         else:
-            candidates = LostReport.objects.filter(report_type=LostReport.TYPE_LOST, status__in=ACTIVE).exclude(pk=pk)
+            candidates = LostReport.objects.filter(
+                report_type=LostReport.TYPE_LOST, status__in=ACTIVE
+            ).exclude(pk=pk)
 
         if not candidates.exists():
-            return Response({'report_id': pk, 'report_type': report.report_type, 'matches_found': 0, 'suggestions': []})
+            return Response({
+                "report_id": pk, "report_type": report.report_type,
+                "matches_found": 0, "suggestions": [],
+            })
 
-        # ── Build prompt ──────────────────────────────────────────────────
-        def report_block(r):
-            return (
-                f"ID: {r.id}\n"
-                f"Type: {r.report_type}\n"
-                f"Item: {r.item_name}\n"
-                f"Category: {r.category}\n"
-                f"Description: {getattr(r, 'description', '') or ''}\n"
-                f"Location: {r.location}\n"
-                f"Date: {r.date_event}\n"
-                f"Status: {r.status}"
+        # Score all candidates with the local engine
+        scored = []
+        for candidate in candidates:
+            lost_r, found_r = (
+                (report, candidate) if report.report_type == LostReport.TYPE_LOST
+                else (candidate, report)
             )
+            result = score_pair(lost_r, found_r)
+            scored.append((result, lost_r, found_r))
 
-        candidates_text = "\n\n".join(
-            f"--- Candidate {i+1} ---\n{report_block(c)}"
-            for i, c in enumerate(candidates[:20])  # cap at 20 to keep prompt small
-        )
-
-        system_prompt = """You are a lost-and-found matching assistant for a Filipino university/mall system.
-Your job is to compare a query report against candidate reports and score how likely they are the same item.
-
-Reports may be written in English, Bisaya (Cebuano), Tagalog, or a mix.
-Common Bisaya terms: nawala=lost, nakita/nakit-an=found, selpon/telepono=phone, pitaka=wallet,
-susi/yabi=key, pula=red, itom=black, puti=white, asul=blue, berde=green, gamay=small, dako=big,
-bag-o=new, daan/luma=old, guba/sira=broken, eskwelahan=school, palengke=market, simbahan=church.
-
-Score each candidate 0.0–1.0 based on:
-- category: same type of item? (0 or 1)
-- name: how similar are the item names? (0–1)
-- description: how similar are the descriptions? (0–1, use 0.3 if either is blank)
-- location: same or nearby location? (0–1)
-- date: how close are the dates? same day=1.0, each day apart reduces score, >10 days=0
-
-Return ONLY valid JSON — no markdown, no explanation — in this exact format:
-{
-  "suggestions": [
-    {
-      "candidate_id": <int>,
-      "score": <float 0-1>,
-      "confidence": "<high|medium|low>",
-      "reasoning": "<one short sentence in English>",
-      "breakdown": {
-        "category": <float>,
-        "name": <float>,
-        "description": <float>,
-        "location": <float>,
-        "date": <float>
-      }
-    }
-  ]
-}
-
-Rules:
-- Include only candidates with score >= 0.25
-- Sort by score descending
-- Return at most 5 suggestions
-- confidence: high >= 0.72, medium >= 0.48, low < 0.48
-- If category is different, cap total score at 0.42"""
-
-        user_prompt = f"""QUERY REPORT (the one we are matching FOR):
-{report_block(report)}
-
-CANDIDATES (possible matches):
-{candidates_text}
-
-Score each candidate against the query report and return JSON."""
-
-        # ── Call Claude API ───────────────────────────────────────────────
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            return Response({
-                'report_id': pk,
-                'report_type': report.report_type,
-                'matches_found': 0,
-                'suggestions': [],
-                'ai_error': 'ANTHROPIC_API_KEY is not configured on the server. Set the environment variable and restart Django.',
-            }, status=503)
-
-        payload = json.dumps({
-            "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 1024,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_prompt}],
-        }).encode()
-
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = json.loads(resp.read())
-            ai_text = raw["content"][0]["text"].strip()
-            # Strip any accidental markdown fences
-            ai_text = re.sub(r"^```[a-z]*\n?", "", ai_text, flags=re.MULTILINE)
-            ai_text = re.sub(r"\n?```$", "", ai_text, flags=re.MULTILINE)
-            ai_result = json.loads(ai_text)
-        except Exception as e:
-            return Response({
-                'report_id': pk,
-                'report_type': report.report_type,
-                'matches_found': 0,
-                'suggestions': [],
-                'ai_error': f'Claude API error: {str(e)}',
-            }, status=502)
-
-        # ── Build response in the same shape as MatchSuggestionSerializer ─
-        # We DON'T write to DB here — only write on confirm.
-        # We map candidate_id back to real report objects for summaries.
-        candidate_map = {c.id: c for c in candidates[:20]}
+        # Sort by score descending, take top 5 with score >= 0.25
+        scored.sort(key=lambda x: x[0]["score"], reverse=True)
+        top = [(r, lr, fr) for r, lr, fr in scored if r["score"] >= 0.25][:5]
 
         def report_summary(r):
             return {
-                'id': r.id, 'item_name': r.item_name,
-                'category': r.category, 'location': r.location,
-                'date_event': str(r.date_event), 'status': r.status,
+                "id": r.id, "item_name": r.item_name,
+                "category": r.category, "location": r.location,
+                "date_event": str(r.date_event), "status": r.status,
+                "description": (r.description or "")[:120],
             }
 
         suggestions_out = []
-        for s in ai_result.get("suggestions", [])[:5]:
-            cid = s.get("candidate_id")
-            candidate = candidate_map.get(cid)
-            if not candidate:
-                continue
-
-            lost_r  = report   if report.report_type   == LostReport.TYPE_LOST  else candidate
-            found_r = candidate if report.report_type   == LostReport.TYPE_LOST  else report
-
-            # Look up existing MatchSuggestion row (if any) so confirm still works
+        for result, lost_r, found_r in top:
+            # Look up existing suggestion if any
             existing = MatchSuggestion.objects.filter(
                 lost_report=lost_r, found_report=found_r
             ).first()
-
             suggestions_out.append({
-                'id':                  existing.pk if existing else None,
-                'lost_report':         lost_r.pk,
-                'found_report':        found_r.pk,
-                'lost_report_summary':  report_summary(lost_r),
-                'found_report_summary': report_summary(found_r),
-                'score':               round(float(s.get("score", 0)), 4),
-                'confidence':          s.get("confidence", "low"),
-                'reasoning':           s.get("reasoning", ""),
-                'score_breakdown':     s.get("breakdown", {}),
-                'status':              existing.status if existing else 'pending',
+                "id":                   existing.pk if existing else None,
+                "lost_report":          lost_r.pk,
+                "found_report":         found_r.pk,
+                "lost_report_summary":  report_summary(lost_r),
+                "found_report_summary": report_summary(found_r),
+                "score":                result["score"],
+                "confidence":           result["confidence"],
+                "reasoning":            f"Matched via local engine — name: {result['breakdown'].get('name',0):.0%}, "
+                                        f"description: {result['breakdown'].get('description',0):.0%}, "
+                                        f"location: {result['breakdown'].get('location',0):.0%}",
+                "score_breakdown":      result["breakdown"],
+                "status":               existing.status if existing else "pending",
             })
 
         return Response({
-            'report_id':     pk,
-            'report_type':   report.report_type,
-            'matches_found': len(suggestions_out),
-            'suggestions':   suggestions_out,
+            "report_id":     pk,
+            "report_type":   report.report_type,
+            "matches_found": len(suggestions_out),
+            "suggestions":   suggestions_out,
         })
+
 
 
 class AdminMatchConfirmView(APIView):
