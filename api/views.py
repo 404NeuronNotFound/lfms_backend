@@ -1820,3 +1820,69 @@ class AdminAuditLogView(APIView):
             "choices": choices,
             "stats":   stats,
         })
+
+class PublicStatsView(APIView):
+    """
+    GET /api/public/stats/
+    No authentication required — used by the landing page.
+    Returns live system statistics and recent activity feed.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        from django.utils import timezone
+        import datetime
+
+        now = timezone.now()
+        start_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        total_reports   = LostReport.objects.count()
+        items_recovered = LostReport.objects.filter(status__in=["claimed", "closed"]).count()
+        open_reports    = LostReport.objects.filter(status="open").count()
+        matched_reports = LostReport.objects.filter(status__in=["matched", "claimed", "closed"]).count()
+        active_users    = get_user_model().objects.filter(
+            is_superuser=False, status="active"
+        ).count()
+        new_this_month  = LostReport.objects.filter(date_reported__gte=start_this_month).count()
+
+        recovery_rate = round((items_recovered / total_reports * 100), 1) if total_reports > 0 else 0
+
+        recent = (
+            LostReport.objects
+            .select_related("user")
+            .order_by("-date_reported")[:10]
+        )
+        recent_activity = []
+        for r in recent:
+            match_score = None
+            try:
+                ms = MatchSuggestion.objects.filter(
+                    models.Q(lost_report=r) | models.Q(found_report=r),
+                    status="pending"
+                ).order_by("-score").first()
+                if ms:
+                    match_score = round(ms.score * 100)
+            except Exception:
+                pass
+            recent_activity.append({
+                "id":       r.id,
+                "type":     r.report_type.capitalize(),
+                "item":     r.item_name,
+                "location": r.location,
+                "time":     r.date_reported.isoformat(),
+                "category": r.category,
+                "match":    f"{match_score}%" if match_score and match_score >= 60 else None,
+            })
+
+        return Response({
+            "stats": {
+                "total_reports":   total_reports,
+                "items_recovered": items_recovered,
+                "active_users":    active_users,
+                "open_reports":    open_reports,
+                "matched_reports": matched_reports,
+                "recovery_rate":   recovery_rate,
+                "new_this_month":  new_this_month,
+            },
+            "recent_activity": recent_activity,
+        })
