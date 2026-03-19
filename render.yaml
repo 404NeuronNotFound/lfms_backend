@@ -4,11 +4,14 @@ services:
     env: python
     region: singapore
     plan: free
+    runtime: python
     buildCommand: "./build.sh"
     startCommand: "gunicorn lfms_backend.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
     envVars:
       - key: DJANGO_ENV
         value: production
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: DJANGO_SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
@@ -16,11 +19,9 @@ services:
           name: findify-db
           property: connectionString
       - key: FRONTEND_URL
-        value: https://your-app.vercel.app   # ← update after Vercel deploy
+        value: https://your-app.vercel.app
       - key: RENDER_EXTERNAL_HOSTNAME
-        value: findify-backend.onrender.com  # ← update after first deploy
-      - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: findify-backend.onrender.com
 
 databases:
   - name: findify-db
