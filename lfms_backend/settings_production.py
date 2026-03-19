@@ -47,7 +47,7 @@ MIDDLEWARE = [
 # ── CORS ──────────────────────────────────────────────────────────────────
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
-    os.environ.get("FRONTEND_URL", "https://your-app.vercel.app"),
+    os.environ.get("FRONTEND_URL", "https://findify-keybeen.vercel.app"),
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
