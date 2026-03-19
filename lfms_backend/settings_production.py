@@ -18,7 +18,7 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
 ]
 
-# ── Database — Render PostgreSQL via psycopg3 ─────────────────────────────
+# ── Database ──────────────────────────────────────────────────────────────
 DATABASES = {
     "default": dj_database_url.config(
         default=os.environ.get("DATABASE_URL", ""),
@@ -44,14 +44,15 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# ── CORS ──────────────────────────────────────────────────────────────────
-# Hardcode your Vercel URL + filter out any empty env vars
+# ── CORS — allow all Vercel URLs for this project ─────────────────────────
 CORS_ALLOW_ALL_ORIGINS = False
-_extra = os.environ.get("FRONTEND_URL", "").strip()
-CORS_ALLOWED_ORIGINS = list(filter(None, [
+CORS_ALLOWED_ORIGINS = [
     "https://findify-keybeen.vercel.app",
-    _extra if _extra.startswith("http") else "",
-]))
+]
+# Allow ALL vercel preview URLs for this project
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://findify-keybeen.*\.vercel\.app$",
+]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     "authorization",
