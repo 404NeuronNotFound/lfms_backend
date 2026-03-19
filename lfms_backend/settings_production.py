@@ -3,6 +3,9 @@ settings_production.py — imported at bottom of settings.py when DJANGO_ENV=pro
 """
 import os
 import dj_database_url
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ── Security ──────────────────────────────────────────────────────────────
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "changeme-set-in-render-env")
@@ -10,7 +13,7 @@ DEBUG = False
 
 ALLOWED_HOSTS = [
     "lfms-backend.onrender.com",
-    os.environ.get("RENDER_EXTERNAL_HOSTNAME", ""),
+    os.environ.get("RENDER_EXTERNAL_HOSTNAME", "lfms-backend.onrender.com"),
     "localhost",
     "127.0.0.1",
 ]
@@ -25,9 +28,6 @@ DATABASES = {
 }
 
 # ── Static files — WhiteNoise ─────────────────────────────────────────────
-from pathlib import Path
-BASE_DIR = Path(__file__).resolve().parent.parent
-
 STATIC_URL  = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
@@ -45,10 +45,13 @@ MIDDLEWARE = [
 ]
 
 # ── CORS ──────────────────────────────────────────────────────────────────
+# Hardcode your Vercel URL + filter out any empty env vars
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
-    os.environ.get("FRONTEND_URL", "https://findify-keybeen.vercel.app"),
-]
+_extra = os.environ.get("FRONTEND_URL", "").strip()
+CORS_ALLOWED_ORIGINS = list(filter(None, [
+    "https://findify-keybeen.vercel.app",
+    _extra if _extra.startswith("http") else "",
+]))
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     "authorization",
