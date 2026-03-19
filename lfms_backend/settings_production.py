@@ -47,11 +47,11 @@ MIDDLEWARE = [
 # ── CORS — allow all Vercel URLs for this project ─────────────────────────
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
-    "https://findify-keybeen.vercel.app",
+    "https://findify-keybeeen.vercel.app",
 ]
 # Allow ALL vercel preview URLs for this project
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://findify-keybeen.*\.vercel\.app$",
+    r"^https://findify-keybeeen.*\.vercel\.app$",
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
